@@ -3,24 +3,36 @@
  * See COPYING.txt for license details.
  */
 
-package com.magento.idea.magento2plugin.actions.generation.generator;
+package com.magento.idea.magento2plugin.actions.generation.generator; //NOPMD
 
 import com.intellij.openapi.application.ApplicationManager;
+import com.intellij.openapi.command.WriteCommandAction;
+import com.intellij.openapi.editor.Document;
 import com.intellij.openapi.module.Module;
 import com.intellij.openapi.module.ModuleUtilCore;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.ui.popup.JBPopupFactory;
+import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.psi.PsiDirectory;
+import com.intellij.psi.PsiDocumentManager;
 import com.intellij.psi.PsiFile;
+import com.intellij.psi.util.PsiTreeUtil;
+import com.intellij.psi.xml.XmlFile;
+import com.intellij.psi.xml.XmlTag;
 import com.maddyhome.idea.copyright.actions.UpdateCopyrightProcessor;
 import com.magento.idea.magento2plugin.actions.generation.generator.util.DirectoryGenerator;
+import com.magento.idea.magento2plugin.actions.generation.generator.util.FindOrCreateLayoutXml;
 import com.magento.idea.magento2plugin.bundles.ValidatorBundle;
 import com.magento.idea.magento2plugin.indexes.ModuleIndex;
+import com.magento.idea.magento2plugin.magento.files.LayoutXml;
 import com.magento.idea.magento2plugin.magento.packages.Areas;
 import com.magento.idea.magento2plugin.magento.packages.ComponentType;
 import com.magento.idea.magento2plugin.magento.packages.File;
+import com.magento.idea.magento2plugin.magento.packages.Package;
 import com.magento.idea.magento2plugin.util.magento.GetMagentoModuleUtil;
+import com.magento.idea.magento2plugin.util.magento.area.AreaResolverUtil;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -30,6 +42,7 @@ public class OverrideTemplateInModuleGenerator {
 
     private final Project project;
     private final ValidatorBundle validatorBundle;
+    private final FindOrCreateLayoutXml findOrCreateLayoutXml;
 
     /**
      * OverrideInThemeGenerator constructor.
@@ -39,6 +52,7 @@ public class OverrideTemplateInModuleGenerator {
     public OverrideTemplateInModuleGenerator(final Project project) {
         this.project = project;
         this.validatorBundle = new ValidatorBundle();
+        this.findOrCreateLayoutXml = new FindOrCreateLayoutXml(project);
     }
 
     /**
@@ -47,7 +61,29 @@ public class OverrideTemplateInModuleGenerator {
      * @param baseFile PsiFile
      * @param moduleName String
      */
-    public void execute(final @NotNull PsiFile baseFile, final String moduleName) {
+    public void execute(
+            final @NotNull PsiFile baseFile,
+            final String moduleName,
+            final String blockName,
+            final @NotNull VirtualFile layoutFile
+    ) {
+        if (AreaResolverUtil.getForFileInModule(layoutFile) == null) {
+            return;
+        }
+        final String[] layoutNameParts = getLayoutNameParts(layoutFile);
+        final XmlFile layout = (XmlFile) this.findOrCreateLayoutXml.execute(
+                layoutNameParts[2],
+                layoutNameParts[0],
+                layoutNameParts[1],
+                layoutNameParts[2],
+                moduleName,
+                AreaResolverUtil.getForFileInModule(layoutFile).toString()
+        );
+
+        if (layout == null) {
+            return;
+        }
+
         final GetMagentoModuleUtil.MagentoModuleData moduleData =
                 GetMagentoModuleUtil.getByContext(baseFile.getContainingDirectory(), project);
 
@@ -62,6 +98,12 @@ public class OverrideTemplateInModuleGenerator {
         }
         final List<String> pathComponents = getModulePathComponents(baseFile);
         directory = getTargetDirectory(directory, pathComponents);
+        final String templatePath = getTemplateXmlPath(
+                pathComponents,
+                moduleName,
+                baseFile.getName()
+        );
+        writeChangesToLayoutFile(layout, blockName, templatePath);
         final PsiFile existentFile = directory.findFile(baseFile.getName());
 
         if (existentFile != null) {
@@ -104,6 +146,96 @@ public class OverrideTemplateInModuleGenerator {
         newFile.navigate(true);
     }
 
+    private void writeChangesToLayoutFile(
+            final XmlFile layout,
+            final String blockName,
+            final String templatePath
+    ) {
+        WriteCommandAction.runWriteCommandAction(project, () -> {
+            final XmlTag rootTag = layout.getRootTag();
+            if (rootTag == null) {
+                return;
+            }
+            XmlTag bodyTag = rootTag.findFirstSubTag(LayoutXml.ROOT_TAG_NAME);
+            boolean isBodyTagNew = false;
+            if (bodyTag == null) {
+                bodyTag = rootTag.createChildTag(
+                        LayoutXml.ROOT_TAG_NAME,
+                        null,
+                        "",
+                        false
+                );
+                isBodyTagNew = true;
+            }
+            final PsiDocumentManager psiDocumentManager = PsiDocumentManager.getInstance(project);
+            final Document document = psiDocumentManager.getDocument(layout);
+
+            if (document == null) {
+                return;
+            }
+            XmlTag targetTag = getTargetTag(bodyTag, blockName);
+
+            boolean isTargetTagNew = false;
+            if (targetTag == null) {
+                targetTag = bodyTag.createChildTag(
+                        LayoutXml.REFERENCE_BLOCK_ATTRIBUTE_TAG_NAME,
+                        null,
+                        "",
+                        false
+                );
+                isTargetTagNew = true;
+            }
+
+            if (isTargetTagNew) {
+                targetTag.setAttribute(LayoutXml.NAME_ATTRIBUTE, blockName);
+                targetTag.setAttribute(LayoutXml.XML_ATTRIBUTE_TEMPLATE, templatePath);
+                targetTag.getValue().setText("");
+                targetTag.collapseIfEmpty();
+                bodyTag.addSubTag(targetTag, false);
+            } else {
+                targetTag.getAttribute(LayoutXml.XML_ATTRIBUTE_TEMPLATE).setValue(templatePath);
+            }
+
+            if (isBodyTagNew) {
+                rootTag.addSubTag(bodyTag, false);
+            }
+            psiDocumentManager.commitDocument(document);
+        });
+    }
+
+    private XmlTag getTargetTag(final @NotNull XmlTag rootTag, final @NotNull String blockName) {
+        final Collection<XmlTag> tags = PsiTreeUtil.findChildrenOfType(rootTag, XmlTag.class);
+        final List<XmlTag> result = tags.stream().filter(
+                xmlTag -> xmlTag.getName().equals(LayoutXml.REFERENCE_BLOCK_ATTRIBUTE_TAG_NAME)
+                && xmlTag.getAttributeValue(LayoutXml.NAME_ATTRIBUTE) != null
+                && xmlTag.getAttributeValue(LayoutXml.NAME_ATTRIBUTE).equals(blockName)
+        ).collect(Collectors.toList());
+
+        return result.isEmpty() ? null : result.get(0);
+    }
+
+    private String getTemplateXmlPath(
+            final List<String> pathComponents,
+            final String moduleName,
+            final String fileName
+    ) {
+        String templatePath = moduleName.concat("::");
+        boolean afterTemplate = false;
+        for (final String pathComponent : pathComponents) {
+            if (afterTemplate) {
+                templatePath = templatePath.concat(pathComponent).concat(Package.V_FILE_SEPARATOR);
+                continue;
+            }
+
+            if ("templates".equals(pathComponent)) {
+                afterTemplate = true;
+            }
+
+        }
+
+        return templatePath.concat(fileName);
+    }
+
     private List<String> getModulePathComponents(final PsiFile file) {
         final List<String> pathComponents = new ArrayList<>();
         final List<String> allowedAreas = new ArrayList<>();
@@ -137,5 +269,28 @@ public class OverrideTemplateInModuleGenerator {
                 directory,
                 pathComponents.stream().collect(Collectors.joining(File.separator))
         );
+    }
+
+    private String[] getLayoutNameParts(final VirtualFile layoutFile) {
+
+        final String[] layoutNameParts = layoutFile.getNameWithoutExtension().split("_");
+        String routeName = "";
+        String controllerName = "";
+        String actionName = "";
+
+        if (layoutNameParts.length >= 1) { // NOPMD
+            routeName = layoutNameParts[0];
+        }
+
+        if (layoutNameParts.length == 3) { // NOPMD
+            controllerName = layoutNameParts[1];
+            actionName = layoutNameParts[2];
+        }
+
+        if (layoutNameParts.length == 2 || layoutNameParts.length > 3) { // NOPMD
+            routeName = layoutFile.getNameWithoutExtension();
+        }
+
+        return new String[]{routeName, controllerName, actionName};
     }
 }
