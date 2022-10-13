@@ -3,17 +3,17 @@
   <grid id="27dc6" binding="contentPane" layout-manager="GridLayoutManager" row-count="3" column-count="1" same-size-horizontally="false" same-size-vertically="false" hgap="-1" vgap="-1">
     <margin top="10" left="10" bottom="10" right="10"/>
     <constraints>
-      <xy x="20" y="20" width="523" height="195"/>
+      <xy x="20" y="20" width="523" height="350"/>
     </constraints>
     <properties>
       <enabled value="true"/>
       <maximumSize width="2147483647" height="2147483647"/>
-      <minimumSize width="350" height="150"/>
-      <preferredSize width="450" height="150"/>
+      <minimumSize width="350" height="290"/>
+      <preferredSize width="450" height="290"/>
     </properties>
     <border type="none"/>
     <children>
-      <grid id="8cbb0" layout-manager="GridLayoutManager" row-count="3" column-count="2" same-size-horizontally="false" same-size-vertically="false" hgap="-1" vgap="-1">
+      <grid id="8cbb0" layout-manager="GridLayoutManager" row-count="7" column-count="2" same-size-horizontally="false" same-size-vertically="false" hgap="-1" vgap="-1">
         <margin top="0" left="0" bottom="0" right="0"/>
         <constraints>
           <grid row="0" column="0" row-span="1" col-span="1" vsize-policy="3" hsize-policy="3" anchor="0" fill="3" indent="0" use-parent-layout="false"/>
@@ -72,6 +72,73 @@
             </constraints>
             <properties/>
           </component>
+          <component id="73f03" class="javax.swing.JLabel" binding="viewModelCheckBoxLabel">
+            <constraints>
+              <grid row="3" column="0" row-span="1" col-span="1" vsize-policy="0" hsize-policy="0" anchor="8" fill="0" indent="0" use-parent-layout="false"/>
+            </constraints>
+            <properties>
+              <text value="Create View Model"/>
+            </properties>
+          </component>
+          <component id="63304" class="javax.swing.JCheckBox" binding="addViewModel">
+            <constraints>
+              <grid row="3" column="1" row-span="1" col-span="1" vsize-policy="0" hsize-policy="3" anchor="8" fill="0" indent="0" use-parent-layout="false"/>
+            </constraints>
+            <properties>
+              <text value=""/>
+            </properties>
+          </component>
+          <component id="157fe" class="javax.swing.JLabel" binding="viewModelClassLabel">
+            <constraints>
+              <grid row="4" column="0" row-span="1" col-span="1" vsize-policy="0" hsize-policy="0" anchor="8" fill="0" indent="0" use-parent-layout="false"/>
+            </constraints>
+            <properties>
+              <labelFor value="64c85"/>
+              <text value="View Model Class"/>
+            </properties>
+          </component>
+          <component id="64c85" class="javax.swing.JTextField" binding="viewModelClassName">
+            <constraints>
+              <grid row="4" column="1" row-span="1" col-span="1" vsize-policy="0" hsize-policy="6" anchor="8" fill="1" indent="0" use-parent-layout="false">
+                <preferred-size width="150" height="-1"/>
+              </grid>
+            </constraints>
+            <properties/>
+          </component>
+          <component id="d97f4" class="javax.swing.JLabel" binding="viewModelDirectoryLabel">
+            <constraints>
+              <grid row="5" column="0" row-span="1" col-span="1" vsize-policy="0" hsize-policy="0" anchor="8" fill="0" indent="0" use-parent-layout="false"/>
+            </constraints>
+            <properties>
+              <labelFor value="3b0e4"/>
+              <text value="View Model Directory"/>
+            </properties>
+          </component>
+          <component id="3b0e4" class="javax.swing.JTextField" binding="viewModelDirectory">
+            <constraints>
+              <grid row="5" column="1" row-span="1" col-span="1" vsize-policy="0" hsize-policy="6" anchor="8" fill="1" indent="0" use-parent-layout="false">
+                <preferred-size width="150" height="-1"/>
+              </grid>
+            </constraints>
+            <properties/>
+          </component>
+          <component id="b8ed8" class="javax.swing.JLabel" binding="viewModelArgumentLabel">
+            <constraints>
+              <grid row="6" column="0" row-span="1" col-span="1" vsize-policy="0" hsize-policy="0" anchor="8" fill="0" indent="0" use-parent-layout="false"/>
+            </constraints>
+            <properties>
+              <labelFor value="549b7"/>
+              <text value="View Model Argument"/>
+            </properties>
+          </component>
+          <component id="549b7" class="javax.swing.JTextField" binding="viewModelArgument">
+            <constraints>
+              <grid row="6" column="1" row-span="1" col-span="1" vsize-policy="0" hsize-policy="6" anchor="8" fill="1" indent="0" use-parent-layout="false">
+                <preferred-size width="150" height="-1"/>
+              </grid>
+            </constraints>
+            <properties/>
+          </component>
         </children>
       </grid>
       <grid id="b9e00" layout-manager="GridLayoutManager" row-count="1" column-count="1" same-size-horizontally="false" same-size-vertically="false" hgap="-1" vgap="-1">
@@ -115,7 +182,7 @@
           </grid>
         </children>
       </grid>
-      <vspacer id="c87f3">
+      <vspacer id="ebc3f">
         <constraints>
           <grid row="1" column="0" row-span="1" col-span="1" vsize-policy="6" hsize-policy="1" anchor="0" fill="2" indent="0" use-parent-layout="false"/>
         </constraints>

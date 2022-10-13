@@ -11,12 +11,15 @@ import com.intellij.psi.PsiFile;
 import com.intellij.psi.search.GlobalSearchScope;
 import com.intellij.util.indexing.FileBasedIndex;
 import com.magento.idea.magento2plugin.actions.generation.OverrideTemplateInModuleAction;
+import com.magento.idea.magento2plugin.actions.generation.data.ViewModelFileData;
 import com.magento.idea.magento2plugin.actions.generation.data.ui.ComboBoxItemData;
 import com.magento.idea.magento2plugin.actions.generation.dialog.validator.annotation.FieldValidation;
 import com.magento.idea.magento2plugin.actions.generation.dialog.validator.annotation.RuleRegistry;
 import com.magento.idea.magento2plugin.actions.generation.dialog.validator.rule.NotEmptyRule;
 import com.magento.idea.magento2plugin.actions.generation.generator.OverrideTemplateInModuleGenerator;
+import com.magento.idea.magento2plugin.actions.generation.generator.util.NamespaceBuilder;
 import com.magento.idea.magento2plugin.indexes.ModuleIndex;
+import com.magento.idea.magento2plugin.magento.files.ViewModelPhp;
 import com.magento.idea.magento2plugin.magento.packages.Areas;
 import com.magento.idea.magento2plugin.magento.packages.Package;
 import com.magento.idea.magento2plugin.stubs.indexes.BlockNameIndex;
@@ -30,15 +33,18 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
 import javax.swing.JButton;
+import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
 import javax.swing.JComponent;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
+import javax.swing.JTextField;
 import javax.swing.KeyStroke;
 import org.jetbrains.annotations.NotNull;
 
-public class OverrideTemplateInModuleDialog extends AbstractDialog {
+public class OverrideTemplateInModuleDialog extends AbstractDialog { //NOPMD - suppressed TooManyFields
 
+    private static final int CHECKBOX_CHECKED_VALUE = 1;
     private static final String MODULE_NAME = "Target Module";
     private static final String BLOCK_NAME = "Target Block";
     private static final String LAYOUT_NAME = "Target Layout";
@@ -48,6 +54,11 @@ public class OverrideTemplateInModuleDialog extends AbstractDialog {
     private JLabel selectModule; //NOPMD
     private JLabel selectBlock; //NOPMD
     private JLabel selectLayout;
+    private JLabel viewModelCheckBoxLabel;
+    private JLabel viewModelArgumentLabel;
+    private JLabel viewModelClassLabel;
+    private JLabel viewModelDirectoryLabel;
+    private JCheckBox addViewModel;
     @FieldValidation(rule = RuleRegistry.NOT_EMPTY, message = {NotEmptyRule.MESSAGE, MODULE_NAME})
     private JComboBox module;
     @FieldValidation(rule = RuleRegistry.NOT_EMPTY, message = {NotEmptyRule.MESSAGE, BLOCK_NAME})
@@ -56,6 +67,9 @@ public class OverrideTemplateInModuleDialog extends AbstractDialog {
     private JComboBox layout;
     private JButton buttonOK;
     private JButton buttonCancel;
+    private JTextField viewModelClassName;
+    private JTextField viewModelDirectory;
+    private JTextField viewModelArgument;
     private Collection<VirtualFile> selectedLayouts;
 
     /**
@@ -79,6 +93,7 @@ public class OverrideTemplateInModuleDialog extends AbstractDialog {
         getRootPane().setDefaultButton(buttonOK);
         fillModuleOptions();
         fillBlockOptions();
+        viewModelDirectory.setText(ViewModelPhp.DEFAULT_DIR);
 
         buttonOK.addActionListener((final ActionEvent event) -> onOK());
         buttonCancel.addActionListener((final ActionEvent event) -> onCancel());
@@ -101,18 +116,84 @@ public class OverrideTemplateInModuleDialog extends AbstractDialog {
 
         selectLayout.setVisible(false);
         layout.setVisible(false);
+        changeViewModelCheckBoxDialogStatus(false);
+        changeViewModelClassDialogStatus(false);
+        addListeners();
+    }
+
+    private void addListeners() { //NOPMD - suppressed CognitiveComplexity
+        module.addItemListener(event -> {
+            if (!((event.getItem()) instanceof ComboBoxItemData)) {
+                return;
+            }
+            final ComboBoxItemData selectedModule = (ComboBoxItemData) event.getItem();
+
+            if (selectedModule.getKey().length() == 0) {
+                overridingBlock.removeAllItems();
+                fillBlockOptions();
+                selectLayout.setVisible(false);
+                layout.setVisible(false);
+                changeViewModelCheckBoxDialogStatus(false);
+                changeViewModelClassDialogStatus(false);
+                return;
+            }
+            overridingBlock.setVisible(true);
+        });
         overridingBlock.addItemListener(event -> {
             if (!((event.getItem()) instanceof ComboBoxItemData)) {
                 return;
             }
             final ComboBoxItemData selectedBlock = (ComboBoxItemData) event.getItem();
+
             if (selectedBlock.getKey().length() == 0) {
                 selectLayout.setVisible(false);
                 layout.setVisible(false);
+                changeViewModelCheckBoxDialogStatus(false);
                 return;
             }
             changeSelectLayoutComboBox(selectedBlock.getKey());
         });
+        layout.addItemListener(event -> {
+            if (!((event.getItem()) instanceof ComboBoxItemData)) {
+                return;
+            }
+            final ComboBoxItemData selectedLayout = (ComboBoxItemData)  event.getItem();
+
+            if (selectedLayout.getKey().length() > 0) {
+                changeViewModelCheckBoxDialogStatus(true);
+            } else {
+                changeViewModelCheckBoxDialogStatus(false);
+            }
+        });
+        addViewModel.addItemListener(event -> {
+            if (!((event.getItem()) instanceof JCheckBox)) {
+                return;
+            }
+
+            if (event.getStateChange() == CHECKBOX_CHECKED_VALUE) {
+                changeViewModelClassDialogStatus(true);
+            } else {
+                changeViewModelClassDialogStatus(false);
+            }
+        });
+    }
+
+    private void changeViewModelCheckBoxDialogStatus(final boolean visibility) {
+        addViewModel.setVisible(visibility);
+        viewModelCheckBoxLabel.setVisible(visibility);
+
+        if (!visibility) {
+            addViewModel.setSelected(false);
+        }
+    }
+
+    private void changeViewModelClassDialogStatus(final boolean visibility) {
+        viewModelClassName.setVisible(visibility);
+        viewModelClassLabel.setVisible(visibility);
+        viewModelDirectory.setVisible(visibility);
+        viewModelDirectoryLabel.setVisible(visibility);
+        viewModelArgument.setVisible(visibility);
+        viewModelArgumentLabel.setVisible(visibility);
     }
 
     private void fillBlockOptions() {
@@ -173,10 +254,13 @@ public class OverrideTemplateInModuleDialog extends AbstractDialog {
         if (moduleData == null) {
             return;
         }
+        module.addItem(
+                new ComboBoxItemData("", " --- Select Module --- ")
+        );
         final List<String> moduleNames = new ModuleIndex(project).getEditableModuleNames();
         for (final String moduleName : moduleNames) {
             if (!moduleData.getName().equals(moduleName)) {
-                module.addItem(moduleName);
+                module.addItem(new ComboBoxItemData(moduleName, moduleName)); //NOPMD
             }
         }
     }
@@ -187,8 +271,13 @@ public class OverrideTemplateInModuleDialog extends AbstractDialog {
         }
         selectedLayouts = layoutFiles;
         layout.removeAllItems();
+        layout.addItem(
+                new ComboBoxItemData("", " --- Select Layout --- ")
+        );
         for (final VirtualFile layoutFile : layoutFiles) {
-            layout.addItem(new ComboBoxItemData(layoutFile.getName(), layoutFile.getName())); //NOPMD
+            layout.addItem(
+                    new ComboBoxItemData(layoutFile.getName(), layoutFile.getName()) //NOPMD
+            );
         }
     }
 
@@ -196,14 +285,39 @@ public class OverrideTemplateInModuleDialog extends AbstractDialog {
         if (validateFormFields()) {
             final OverrideTemplateInModuleGenerator overrideInModuleGenerator =
                     new OverrideTemplateInModuleGenerator(project);
+
+            final NamespaceBuilder namespaceBuilder = new NamespaceBuilder(
+                    getModuleName(),
+                    getViewModelClassName(),
+                    getViewModelDirectory()
+            );
             overrideInModuleGenerator.execute(
                     psiFile,
-                    getModule(),
+                    getModuleName(),
                     getSelectedBlock(),
-                    getSelectedLayoutFile()
+                    getSelectedLayoutFile(),
+                    addViewModel.isSelected(),
+                    new ViewModelFileData(
+                            getViewModelDirectory(),
+                            getViewModelClassName(),
+                            getModuleName(),
+                            getViewModelArgumentName(),
+                            namespaceBuilder.getNamespace())
             );
             exit();
         }
+    }
+
+    private String getViewModelClassName() {
+        return this.viewModelClassName.getText().trim();
+    }
+
+    private String getViewModelDirectory() {
+        return this.viewModelDirectory.getText().trim();
+    }
+
+    private String getViewModelArgumentName() {
+        return this.viewModelArgument.getText().trim();
     }
 
     private String getArea(final String filePath) {
@@ -228,7 +342,7 @@ public class OverrideTemplateInModuleDialog extends AbstractDialog {
         );
     }
 
-    private String getModule() {
+    private String getModuleName() {
         return this.module.getSelectedItem().toString();
     }
 
@@ -247,7 +361,7 @@ public class OverrideTemplateInModuleDialog extends AbstractDialog {
     }
 
     /**
-     * Ope popup.
+     * Open popup.
      *
      * @param project Project
      * @param psiFile PsiFile

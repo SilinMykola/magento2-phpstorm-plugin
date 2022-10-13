@@ -20,8 +20,12 @@ import com.intellij.psi.util.PsiTreeUtil;
 import com.intellij.psi.xml.XmlFile;
 import com.intellij.psi.xml.XmlTag;
 import com.maddyhome.idea.copyright.actions.UpdateCopyrightProcessor;
+import com.magento.idea.magento2plugin.actions.generation.InjectAViewModelAction;
+import com.magento.idea.magento2plugin.actions.generation.data.ViewModelFileData;
+import com.magento.idea.magento2plugin.actions.generation.generator.code.ClassArgumentInXmlConfigGenerator;
 import com.magento.idea.magento2plugin.actions.generation.generator.util.DirectoryGenerator;
 import com.magento.idea.magento2plugin.actions.generation.generator.util.FindOrCreateLayoutXml;
+import com.magento.idea.magento2plugin.actions.generation.generator.util.NamespaceBuilder;
 import com.magento.idea.magento2plugin.bundles.ValidatorBundle;
 import com.magento.idea.magento2plugin.indexes.ModuleIndex;
 import com.magento.idea.magento2plugin.magento.files.LayoutXml;
@@ -29,6 +33,7 @@ import com.magento.idea.magento2plugin.magento.packages.Areas;
 import com.magento.idea.magento2plugin.magento.packages.ComponentType;
 import com.magento.idea.magento2plugin.magento.packages.File;
 import com.magento.idea.magento2plugin.magento.packages.Package;
+import com.magento.idea.magento2plugin.magento.packages.XsiTypes;
 import com.magento.idea.magento2plugin.util.magento.GetMagentoModuleUtil;
 import com.magento.idea.magento2plugin.util.magento.area.AreaResolverUtil;
 import java.util.ArrayList;
@@ -65,8 +70,10 @@ public class OverrideTemplateInModuleGenerator {
             final @NotNull PsiFile baseFile,
             final String moduleName,
             final String blockName,
-            final @NotNull VirtualFile layoutFile
-    ) {
+            final @NotNull VirtualFile layoutFile,
+            final boolean addViewModel,
+            final ViewModelFileData viewModelFileData
+            ) {
         if (AreaResolverUtil.getForFileInModule(layoutFile) == null) {
             return;
         }
@@ -104,6 +111,10 @@ public class OverrideTemplateInModuleGenerator {
                 baseFile.getName()
         );
         writeChangesToLayoutFile(layout, blockName, templatePath);
+
+        if (addViewModel) {
+            createViewModel(layout, viewModelFileData, moduleName, blockName);
+        }
         final PsiFile existentFile = directory.findFile(baseFile.getName());
 
         if (existentFile != null) {
@@ -144,6 +155,41 @@ public class OverrideTemplateInModuleGenerator {
         );
         processor.run();
         newFile.navigate(true);
+    }
+
+    private void createViewModel(
+            final XmlFile layout,
+            final ViewModelFileData viewModelFileData,
+            final String moduleName,
+            final String blockName
+    ) {
+        new ModuleViewModelClassGenerator(viewModelFileData, project)
+                .generate(InjectAViewModelAction.ACTION_NAME, true);
+        final XmlTag rootTag = layout.getRootTag();
+
+        if (rootTag == null) {
+            return;
+        }
+        final XmlTag bodyTag = rootTag.findFirstSubTag(LayoutXml.ROOT_TAG_NAME);
+
+        if (bodyTag == null) {
+            return;
+        }
+        final XmlTag targetTag = getTargetTag(bodyTag, blockName);
+        if (targetTag == null) {
+            return;
+        }
+        final NamespaceBuilder namespaceBuilder = new NamespaceBuilder(
+                moduleName,
+                viewModelFileData.getViewModelClassName(),
+                viewModelFileData.getViewModelDirectory()
+        );
+        new ClassArgumentInXmlConfigGenerator(
+                project,
+                viewModelFileData.getViewModelXmlArgumentName(),
+                XsiTypes.object.toString(),
+                namespaceBuilder.getClassFqn()
+        ).generate(targetTag);
     }
 
     private void writeChangesToLayoutFile(
