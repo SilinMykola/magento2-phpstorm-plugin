@@ -22,7 +22,7 @@ class MagentoInspectionUiTest {
         prepareProject = { root ->
             val files = mapOf(
                 "app/code/Acme/Shipping/etc/di.xml" to """
-                    <config><type name="Acme\Shipping\Target"><plugin name="shipping_plugin" type="Acme\Shipping\Plugin"/></type></config>
+                    <config><type name="Acme\Shipping\Target"><plugin name="shipping_plugin" type="Acme\Shipping\Plugin"/></type><preference for="Acme\Shipping\Api" type="Acme\Shipping\Impl"/></config>
                 """.trimIndent(),
                 "app/code/Acme/Shipping/etc/events.xml" to """
                     <config><event name="shipping_event"><observer name="shipping_observer" instance="Acme\Shipping\Observer" disabled="true"/></event></config>
@@ -78,6 +78,10 @@ class MagentoInspectionUiTest {
             commands.query(project, "observers_for_event", """{"eventName":"shipping_event","format":"json"}""")
         }
         check(observers.contains("\"status\": \"ok\"") && observers.contains("\"observerName\": \"shipping_observer\"")) { observers }
+        val preference = withReadAction {
+            commands.query(project, "preference_resolution", """{"className":"Acme\\Shipping\\Api","area":"frontend"}""")
+        }
+        check(preference.startsWith("Preference for Acme\\Shipping\\Api in area frontend: Acme\\Shipping\\Impl")) { preference }
         val empty = withReadAction { commands.query(project, "ui_component", """{"name":"missing_component"}""") }
         check(empty == "No UI components matched \"missing_component\".") { empty }
     }

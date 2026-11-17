@@ -85,6 +85,44 @@ internal object MagentoDiQueries {
             }
     }
 
+    fun findPreferenceResolution(project: Project, className: String, area: String): String {
+        val resolution = MagentoPreferenceResolution.resolve(project, className, area)
+        if (resolution.candidates.isEmpty()) {
+            return "No preference is declared for ${resolution.className} in global${if (area == "global") "" else " or $area"}."
+        }
+        val lines = mutableListOf(
+            "Preference for ${resolution.className} in area $area: ${resolution.effectiveType ?: "unknown"}",
+            "reason: ${resolution.reason}",
+            "module order: ${resolution.order.path?.takeIf { resolution.order.problem == null } ?: "unknown (${resolution.order.problem})"}"
+        )
+        if (resolution.chain.size > 1) {
+            lines += "chain: ${(listOf(resolution.className) + resolution.chain).joinToString(" -> ")}"
+        }
+        lines += ""
+        lines += "Declarations in load order:"
+        for (candidate in resolution.candidates.take(MagentoMcpSupport.MAX_MATCHES)) {
+            val record = candidate.record
+            lines += "- ${candidate.status}: ${record.preferenceType ?: "-"} " +
+                "(${record.filePath}:${record.line}, ${candidate.module ?: "no module"}, " +
+                "${MagentoMcpSupport.determineConfigScope(record.filePath, ModuleDiXml.FILE_NAME)})"
+        }
+        if (resolution.candidates.size > MagentoMcpSupport.MAX_MATCHES) {
+            lines += ""
+            lines += MagentoInspectionResults.TEXT_TRUNCATED_HINT
+        }
+        return lines.joinToString("\n")
+    }
+
+    /** One record per declaration in load order; the decision is in the reply's `resolution`. */
+    fun preferenceRecords(resolution: MagentoPreferenceResolution.Resolution): List<InspectionRecord> =
+        resolution.candidates.mapIndexed { index, candidate ->
+            val record = candidate.record
+            InspectionRecord("preference", resolution.className, record.filePath, record.line,
+                MagentoMcpSupport.determineConfigScope(record.filePath, ModuleDiXml.FILE_NAME),
+                linkedMapOf("type" to record.preferenceType, "status" to candidate.status, "loadOrder" to index + 1),
+                moduleHint = candidate.module)
+        }
+
     /** Retains the existing query API while dispatching PHP semantics through the optional provider. */
     fun findPluginsForMethod(project: Project, className: String, methodName: String): String {
         val provider = MagentoMethodPluginQueryProvider.EP_NAME.extensionList.firstOrNull()

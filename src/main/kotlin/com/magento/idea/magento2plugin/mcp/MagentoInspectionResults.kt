@@ -81,7 +81,9 @@ internal object MagentoInspectionResults {
         queryType: String,
         query: String,
         records: List<InspectionRecord>,
-        options: InspectionOptions
+        options: InspectionOptions,
+        /** Query-level conclusion that does not depend on the page or the filters. */
+        resolution: JSONObject? = null
     ): String {
         val owners = if (records.isEmpty()) emptyMap() else MagentoMcpSnapshots.moduleOwners(project)
         val owned = records.map { it to (ownerOf(it.path, owners) ?: it.moduleHint) }
@@ -102,6 +104,7 @@ internal object MagentoInspectionResults {
             .put("complete", next >= matching.size)
             .put("nextCursor", if (next < matching.size) encodeCursor(next, fingerprint) else JSONObject.NULL)
             .put("records", JSONArray(page.map { (record, module) -> json(record, module) }))
+            .apply { resolution?.let { put("resolution", it) } }
             .toString(2)
     }
 
@@ -122,7 +125,7 @@ internal object MagentoInspectionResults {
         .apply { record.fields.forEach { (name, value) -> put(name, value ?: JSONObject.NULL) } }
 
     /** The nearest enclosing module directory, so a nested module owns its own files. */
-    private fun ownerOf(path: String?, owners: Map<String, String>): String? {
+    fun ownerOf(path: String?, owners: Map<String, String>): String? {
         var directory = path ?: return null
         while (true) {
             owners[directory]?.let { return it }

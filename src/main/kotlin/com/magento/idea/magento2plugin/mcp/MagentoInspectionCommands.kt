@@ -22,7 +22,8 @@ internal object MagentoInspectionCommands {
         "observers_for_event",
         "layout_entities",
         "ui_component",
-        "acl_or_menu"
+        "acl_or_menu",
+        "preference_resolution"
     )
 
     /** Query types with structured results, and the filters each supports. */
@@ -33,7 +34,9 @@ internal object MagentoInspectionCommands {
         "layout_entities" to setOf("module", "area", "path"),
         "ui_component" to setOf("module", "area", "path"),
         "acl_or_menu" to setOf("module", "area", "path"),
-        "plugins_for_method" to setOf("module", "area", "path")
+        "plugins_for_method" to setOf("module", "area", "path"),
+        // `area` is this query's own parameter, the area to resolve.
+        "preference_resolution" to setOf("module", "path")
     )
 
     private val viewTypes = setOf("layout_entities", "ui_component")
@@ -52,7 +55,8 @@ internal object MagentoInspectionCommands {
         "observers_for_event" to "eventName",
         "layout_entities" to "name",
         "ui_component" to "name",
-        "acl_or_menu" to "identifier"
+        "acl_or_menu" to "identifier",
+        "preference_resolution" to "className"
     )
 
     private val querySummaries = mapOf(
@@ -62,7 +66,8 @@ internal object MagentoInspectionCommands {
         "observers_for_event" to "Find observer declarations by full or partial Magento event name.",
         "layout_entities" to "Find layout handles, block names, and container names.",
         "ui_component" to "Find UI component XML definitions by component file name.",
-        "acl_or_menu" to "Find ACL resource IDs and admin menu entries."
+        "acl_or_menu" to "Find ACL resource IDs and admin menu entries.",
+        "preference_resolution" to "Explain which DI preference Magento applies for a type in an area, and why."
     )
 
     fun help(): String = """
@@ -134,7 +139,8 @@ internal object MagentoInspectionCommands {
             return jsonQuery(project, normalizedType, parameters)
         }
         try {
-            MagentoInspectionResults.options(parameters, jsonFilters[normalizedType].orEmpty())
+            MagentoInspectionResults.options(optionParameters(normalizedType, parameters), jsonFilters[normalizedType].orEmpty())
+            requestedArea(normalizedType, parameters)
         } catch (exception: InvalidInspectionRequest) {
             return exception.message.orEmpty()
         }
@@ -199,6 +205,12 @@ internal object MagentoInspectionCommands {
                 identifier = parameters.requireString("identifier")
             )
 
+            "preference_resolution" -> MagentoDiQueries.findPreferenceResolution(
+                project = project,
+                className = parameters.requireString("className"),
+                area = requestedArea(queryType, parameters)
+            )
+
             else -> unknownTypeMessage(queryType)
         }
     }
@@ -220,7 +232,8 @@ internal object MagentoInspectionCommands {
         val filters = jsonFilters[queryType]
             ?: return status("invalid_request", "format `json` is not available for queryType `$queryType` yet. Omit format to get text.")
         val options = try {
-            MagentoInspectionResults.options(parameters, filters)
+            requestedArea(queryType, parameters)
+            MagentoInspectionResults.options(optionParameters(queryType, parameters), filters)
         } catch (exception: InvalidInspectionRequest) {
             return status("invalid_request", exception.message.orEmpty())
         }
@@ -230,7 +243,10 @@ internal object MagentoInspectionCommands {
         }
         return try {
             val value = parameters.requireString(queryParameter)
+            var resolution: JSONObject? = null
             val records = when (queryType) {
+                "preference_resolution" -> MagentoPreferenceResolution.resolve(project, value, requestedArea(queryType, parameters))
+                    .also { resolution = it.summary() }.let(MagentoDiQueries::preferenceRecords)
                 "module" -> MagentoModuleQueries.moduleRecords(project, value)
                 "di_config" -> MagentoDiQueries.diConfigRecords(project, value)
                 "layout_entities" -> MagentoViewQueries.layoutRecords(project, value)
@@ -240,7 +256,7 @@ internal object MagentoInspectionCommands {
                     ?: return status("unavailable", "The registered `plugins_for_method` provider returns text only. Omit format to get text.", options)
                 else -> MagentoEventQueries.observerRecords(project, value)
             }
-            MagentoInspectionResults.respond(project, queryType, query, records, options)
+            MagentoInspectionResults.respond(project, queryType, query, records, options, resolution)
         } catch (exception: MissingParameterException) {
             status("invalid_request", "Missing required parameter `${exception.parameterName}` for queryType `$queryType`.", options)
         } catch (exception: InvalidInspectionRequest) {
@@ -250,6 +266,23 @@ internal object MagentoInspectionCommands {
         } catch (_: IndexNotReadyException) {
             status("indexing", MagentoMcpSupport.INDEXES_NOT_READY_MESSAGE, options)
         }
+    }
+
+    /** Parameters without this query's own `area`, which is not the shared area filter. */
+    private fun optionParameters(queryType: String, parameters: JSONObject): JSONObject =
+        if (queryType == "preference_resolution") JSONObject(parameters.toMap() - "area") else parameters
+
+    private fun requestedArea(queryType: String, parameters: JSONObject): String {
+        if (queryType != "preference_resolution") return ""
+        val value = parameters.opt("area")
+        if (value != null && value !is String) {
+            throw InvalidInspectionRequest("area must be a string such as `frontend`.")
+        }
+        val area = (value as String?)?.trim()?.lowercase()?.ifEmpty { null } ?: "global"
+        if (!MagentoPreferenceResolution.validArea(area)) {
+            throw InvalidInspectionRequest("area must be an area code such as `global`, `frontend`, `adminhtml`, `webapi_rest` or `graphql`.")
+        }
+        return area
     }
 
     private fun parseParameters(parametersJson: String): JSONObject {
@@ -270,6 +303,7 @@ internal object MagentoInspectionCommands {
             "layout" -> "layout_entities"
             "ui", "ui_components" -> "ui_component"
             "acl", "menu" -> "acl_or_menu"
+            "preference", "effective_preference" -> "preference_resolution"
             else -> queryType.trim().lowercase().replace('-', '_')
         }
     }
@@ -331,6 +365,16 @@ internal object MagentoInspectionCommands {
             Required: identifier. Use an ACL or menu resource ID such as `Magento_Catalog::catalog` or `Foo_Bar::manage_items`, or a fragment such as `catalog`.
             Example parametersJson:
             {"identifier":"Magento_Catalog::catalog"}
+        """.trimIndent()
+
+        "preference_resolution" -> """
+            queryType: preference_resolution
+            Explains which <preference> Magento applies for a class or interface in one area, and lists every declaration in load order with its status: applies, overridden, disabled_module, not_loaded, or candidate when the order cannot be decided.
+            Required: className. Optional: area (default global), such as frontend, adminhtml, webapi_rest or graphql.
+            The order comes from app/etc/di.xml, then the enabled modules in app/etc/config.php order, then the area's di.xml files; the last declaration wins. Preferences of the winning class are followed. Without a readable config.php, a winner is named only when all loaded declarations agree.
+            Reads XML declarations and config.php; it does not run Magento or read env.php.
+            Example parametersJson:
+            {"className":"Magento\\Framework\\UrlInterface","area":"adminhtml"}
         """.trimIndent()
 
         else -> unknownTypeMessage(queryType)

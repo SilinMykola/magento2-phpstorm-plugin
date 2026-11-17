@@ -137,6 +137,7 @@ Available without the JetBrains PHP plugin (including WebStorm):
 - `layout_entities`
 - `ui_component`
 - `acl_or_menu`
+- `preference_resolution`: which `<preference>` Magento applies for `className` in `area` (default `global`), from `app/etc/di.xml`, the module order in `app/etc/config.php` and the area's `di.xml` files. Use it when a preference seems to be ignored. When the order cannot be read, it names a class only if every loaded declaration agrees, and otherwise reports `unknown` instead of guessing.
 
 `plugins_for_method` requires the JetBrains PHP plugin. Use `help` to check which queries the connected IDE supports. If a query is unavailable, report the requirement instead of reporting no matches.
 
