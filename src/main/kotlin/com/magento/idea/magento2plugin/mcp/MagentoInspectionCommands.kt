@@ -158,11 +158,14 @@ internal object MagentoInspectionCommands {
         if (MagentoInspectionResults.isJson(parameters)) {
             return jsonQuery(project, normalizedType, parameters, indexKeys)
         }
-        try {
-            MagentoInspectionResults.options(optionParameters(normalizedType, parameters), jsonFilters[normalizedType].orEmpty())
-            requestedArea(normalizedType, parameters)
-        } catch (exception: InvalidInspectionRequest) {
-            return exception.message.orEmpty()
+        // Query types without structured results keep their own parameters, such as limit of module_dependencies.
+        jsonFilters[normalizedType]?.let { filters ->
+            try {
+                MagentoInspectionResults.options(optionParameters(normalizedType, parameters), filters)
+                requestedArea(normalizedType, parameters)
+            } catch (exception: InvalidInspectionRequest) {
+                return exception.message.orEmpty()
+            }
         }
 
         return try {
@@ -260,14 +263,14 @@ internal object MagentoInspectionCommands {
     }
 
     private fun jsonQuery(project: Project, queryType: String, parameters: JSONObject, indexKeys: MagentoIndexKeys?): String {
+        val filters = jsonFilters[queryType] ?: return MagentoInspectionResults.status(queryType, "", null,
+            "invalid_request", "format `json` is not available for queryType `$queryType`. Omit format.")
         val queryParameter = queryParameters.getValue(queryType)
         val query = parameters.optString(queryParameter).trim().let {
             if (queryType == "plugins_for_method") "$it::${parameters.optString("methodName").trim()}" else it
         }
         fun status(status: String, message: String, options: InspectionOptions? = null) =
             MagentoInspectionResults.status(queryType, query, options, status, message)
-        val filters = jsonFilters[queryType]
-            ?: return status("invalid_request", "format `json` is not available for queryType `$queryType` yet. Omit format to get text.")
         val options = try {
             requestedArea(queryType, parameters)
             MagentoInspectionResults.options(optionParameters(queryType, parameters), filters)
