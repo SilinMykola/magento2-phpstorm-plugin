@@ -141,18 +141,20 @@ internal object MagentoPreferenceResolution {
 
     /**
      * Load position of a declaration in [area]: stage 0 for app/etc/di.xml, 1 for global module files,
-     * 2 for the area's module files; null for files of other areas.
+     * 2 for the area's module files; null for files of other areas. Only di.xml has an app/etc stage.
      */
     fun place(
         filePath: String,
         area: String,
         order: ModuleOrder,
         owners: Map<String, String>,
-        rootModule: MagentoInspectionResults.RootModuleFiles? = null
+        rootModule: MagentoInspectionResults.RootModuleFiles? = null,
+        fileName: String = ModuleDiXml.FILE_NAME
     ): Placement? {
-        val scope = MagentoMcpSupport.determineConfigScope(filePath, ModuleDiXml.FILE_NAME)
+        val scope = MagentoMcpSupport.determineConfigScope(filePath, fileName)
         val directory = filePath.substringBeforeLast('/', "")
-        val primary = filePath.endsWith("app/etc/" + ModuleDiXml.FILE_NAME) && owners.ownerOf(filePath) == null
+        val primary = fileName == ModuleDiXml.FILE_NAME &&
+            filePath.endsWith("app/etc/" + ModuleDiXml.FILE_NAME) && owners.ownerOf(filePath) == null
         // Magento reads <root>/app/etc/di.xml; copies such as vendor/magento/magento2-base/app/etc/di.xml are not loaded.
         val primaryDirectory = order.path?.substringBeforeLast('/')
         val loadedPrimary = if (primaryDirectory != null) directory == primaryDirectory else "vendor" !in directory.split('/')
@@ -166,9 +168,9 @@ internal object MagentoPreferenceResolution {
         }
         val moduleDirectory = MagentoInspectionResults.ownerDirectory(filePath, owners, rootModule)
         val module = moduleDirectory?.let(owners::get)
-        // Magento reads only <module>/etc/di.xml and <module>/etc/<area>/di.xml, not copies such as test fixtures.
+        // Magento reads only <module>/etc/<file> and <module>/etc/<area>/<file>, not copies such as test fixtures.
         val inModule = filePath.removePrefix("$moduleDirectory/")
-        val expected = if (stage == 1) "etc/" + ModuleDiXml.FILE_NAME else "etc/$area/" + ModuleDiXml.FILE_NAME
+        val expected = if (stage == 1) "etc/$fileName" else "etc/$area/$fileName"
         val status = when {
             module == null -> "not_loaded"
             inModule != expected -> "not_loaded"

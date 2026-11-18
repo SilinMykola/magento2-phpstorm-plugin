@@ -154,14 +154,17 @@ internal object MagentoMcpSnapshots {
             for (eventTag in rootTag.findSubTags("event")) {
                 val eventName = eventTag.getAttributeValue("name") ?: continue
                 for (observerTag in eventTag.findSubTags("observer")) {
+                    val instance = MagentoMcpSupport.presentableFqn(observerTag.getAttributeValue("instance"))
+                    val disabled = observerTag.getAttributeValue("disabled")
                     observersByEvent.getOrPut(eventName, ::mutableListOf) += EventObserverRecord(
                         filePath = filePath,
                         line = lines.lineOf(observerTag),
                         observerName = observerTag.getAttributeValue("name") ?: "-",
-                        observerInstance = MagentoMcpSupport.presentableFqn(
-                            observerTag.getAttributeValue("instance")
-                        ) ?: "-",
-                        disabled = observerTag.getAttributeValue("disabled").equals("true", ignoreCase = true)
+                        observerInstance = instance ?: "-",
+                        disabled = disabled.equals("true", ignoreCase = true),
+                        declaredInstance = instance,
+                        // Magento's converter disables an observer only for the exact value `true`.
+                        declaredDisabled = disabled?.let { it == "true" }
                     )
                 }
             }
@@ -337,7 +340,11 @@ internal data class EventObserverRecord(
     val line: Int,
     val observerName: String,
     val observerInstance: String,
-    val disabled: Boolean
+    val disabled: Boolean,
+    /** The `instance` attribute; null when it is absent, so an earlier declaration's class stays. */
+    val declaredInstance: String? = null,
+    /** Whether a `disabled` attribute disables the observer; null when it is absent. */
+    val declaredDisabled: Boolean? = null
 ) : HasFilePath
 
 internal data class LayoutHandleRecord(

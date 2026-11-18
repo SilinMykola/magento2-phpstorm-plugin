@@ -40,7 +40,7 @@ host.runtimeClasspath += sourceSets.main.get().output
 kotlin.sourceSets.named("host") {
     kotlin.srcDir(shared.resolve("kotlin"))
     kotlin.include("com/magento/idea/magento2plugin/hce/**")
-    listOf("MagentoModuleDependencyQueries", "MagentoXmlDiagnostics", "MagentoIndexKeys", "MagentoInspectionCommands", "MagentoInspectionResults", "MagentoPreferenceResolution", "MagentoPluginResolution", "MagentoMcpProjectContext", "MagentoModuleQueries", "MagentoDiQueries", "MagentoEventQueries",
+    listOf("MagentoModuleDependencyQueries", "MagentoXmlDiagnostics", "MagentoIndexKeys", "MagentoInspectionCommands", "MagentoInspectionResults", "MagentoPreferenceResolution", "MagentoPluginResolution", "MagentoObserverResolution", "MagentoMcpProjectContext", "MagentoModuleQueries", "MagentoDiQueries", "MagentoEventQueries",
         "MagentoViewQueries", "MagentoMcpSnapshots", "MagentoMcpSupport", "MagentoMcpSetupGuidance",
         "MagentoMcpReadActionSupport", "MagentoMcpToolsetSupport", "MagentoMethodPluginQueryProvider", "MagentoSkillCommands",
         "MagentoMagerunQueries", "MagentoMagerunSupport", "MagentoMagerunProcess", "MagentoCliToolQueries",

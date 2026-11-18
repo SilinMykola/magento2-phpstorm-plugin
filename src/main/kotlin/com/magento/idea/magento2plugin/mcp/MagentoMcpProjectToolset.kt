@@ -152,7 +152,8 @@ class MagentoMcpProjectToolset : McpToolset {
         "Available inspections:\n" +
         "- Shared queryType values are `module`, `module_dependencies`, `di_config`, `observers_for_event`, " +
         "`layout_entities`, `ui_component`, `ui_template`, `acl_or_menu`, and `preference_resolution`, which " +
-        "explains which DI preference applies in an area.\n" +
+        "explains which DI preference applies in an area. With `area`, `observers_for_event` lists the " +
+        "observers Magento runs in that area and why the other declarations do not run.\n" +
         "- `plugins_for_method` additionally requires the JetBrains PHP plugin; `help` reports the " +
         "capabilities available in this IDE. With `area`, it lists the plugins Magento runs in that area " +
         "and why the other declarations do not run.\n\n" +

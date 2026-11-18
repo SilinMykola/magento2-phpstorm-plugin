@@ -67,11 +67,15 @@ Found 1 event match(es) for "test_event_in_test_class".
 
 test_event_in_test_class
 file: vendor/magento/module-catalog/etc/events.xml observer=test_observer instance=Magento\Catalog\Observer\TestObserver disabled=false
+
+These are declarations of every area; disabled and replaced declarations elsewhere are not applied. Add `area` to get the observers Magento runs in one area, with the reason for each one it does not run.
 ### observers_for_event {"eventName":"e"}
 Found 1 event match(es) for "e".
 
 test_event_in_test_class
 file: vendor/magento/module-catalog/etc/events.xml observer=test_observer instance=Magento\Catalog\Observer\TestObserver disabled=false
+
+These are declarations of every area; disabled and replaced declarations elsewhere are not applied. Add `area` to get the observers Magento runs in one area, with the reason for each one it does not run.
 ### module {}
 Missing required parameter `moduleName` for queryType `module`. Call magento_inspect with mode `detailed_schema` and queryType `module` for the expected parameters.
 ### di_config {"className":""}

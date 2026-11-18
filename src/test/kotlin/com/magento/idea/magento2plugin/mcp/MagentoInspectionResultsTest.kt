@@ -81,9 +81,10 @@ class MagentoInspectionResultsTest : BaseProjectTestCase() {
 
     fun testFiltersNarrowRecordsAndRejectWhatDoesNotApply() {
         val module = addEvents()
+        // For observers, area selects the area to resolve: global and adminhtml declarations, not a filter.
         val admin = events(JSONObject().put("area", "adminhtml").put("limit", 100))
-        assertEquals(8, admin.getInt("total"))
-        assertEquals("adminhtml", admin.getJSONObject("scope").getString("area"))
+        assertEquals(48, admin.getInt("total"))
+        assertEquals("adminhtml", admin.getJSONObject("resolution").getString("area"))
         assertEquals(40, events(JSONObject().put("area", "global").put("limit", 100)).getInt("total"))
         assertEquals(48, events(JSONObject().put("module", "Foo_Bar2").put("path", "$module/etc/")).getInt("total"))
         assertEquals(8, events(JSONObject().put("path", "./$module/etc/adminhtml")).getInt("total"))
@@ -307,8 +308,11 @@ class MagentoInspectionResultsTest : BaseProjectTestCase() {
             "etc/adminhtml/events.xml" to "adminhtml"), observers.associate { it.getString("path") to it.getString("area") })
         assertTrue(observers.toString(), observers.all { it.optString("module") == "Acme_Root" })
         assertEquals(3, rootEvents(JSONObject().put("module", "Acme_Root")).getInt("total"))
-        assertEquals(listOf("root_frontend"), records(rootEvents(JSONObject().put("area", "frontend"))).map { it.getString("observerName") })
-        assertEquals(listOf("root_adminhtml"), records(rootEvents(JSONObject().put("area", "adminhtml"))).map { it.getString("observerName") })
+        // With area, the root module's global and area files are loaded and resolved.
+        assertEquals(listOf("root_global:applies", "root_frontend:applies"), records(rootEvents(JSONObject().put("area", "frontend")))
+            .map { "${it.getString("observerName")}:${it.getString("status")}" })
+        assertEquals(listOf("root_global:applies", "root_adminhtml:applies"), records(rootEvents(JSONObject().put("area", "adminhtml")))
+            .map { "${it.getString("observerName")}:${it.getString("status")}" })
         assertEquals(listOf("root_adminhtml"), records(rootEvents(JSONObject().put("module", "Acme_Root")
             .put("path", "etc/adminhtml"))).map { it.getString("observerName") })
 

@@ -32,7 +32,8 @@ internal object MagentoInspectionCommands {
     private val jsonFilters = mapOf(
         "module" to setOf("path"),
         "di_config" to setOf("module", "area", "path"),
-        "observers_for_event" to setOf("module", "area", "path"),
+        // `area` is this query's own parameter, the area to resolve.
+        "observers_for_event" to setOf("module", "path"),
         "layout_entities" to setOf("module", "area", "path"),
         "ui_component" to setOf("module", "area", "path"),
         "acl_or_menu" to setOf("module", "area", "path"),
@@ -67,7 +68,7 @@ internal object MagentoInspectionCommands {
         "module_dependencies" to "Inspect declared sequence ordering and Composer package requirements in either direction.",
         "di_config" to "Find di.xml declarations related to a PHP FQN or virtual type.",
         "plugins_for_method" to "Find plugins that intercept a target class or interface method.",
-        "observers_for_event" to "Find observer declarations by full or partial Magento event name.",
+        "observers_for_event" to "Find observer declarations by full or partial Magento event name, or the observers Magento runs in an area.",
         "layout_entities" to "Find layout handles, block names, and container names.",
         "ui_component" to "Find UI component XML definitions by component file name.",
         "ui_template" to "Resolve a literal UI template alias to candidate HTML files.",
@@ -119,6 +120,8 @@ internal object MagentoInspectionCommands {
             {"$parameter":"…",${if (normalizedType == "plugins_for_method") "\"methodName\":\"…\"," else ""}"format":"json","limit":50}
         """.trimIndent() + if (normalizedType == "plugins_for_method") {
             "\nPlugin records point at the di.xml declaration like di_config plugin records (name, type, sortOrder); method, pluginKind (before, around, after), target, methodPath and methodLine describe the matched plugin method. With area, records also have status (applies, disabled, overridden, disabled_module, not_loaded, candidate) and, for disabled or overridden ones, statusBy (path:line of the deciding declaration); sortOrder is the one Magento uses, and resolution gives the area, moduleOrderSource and a problem when some records stay candidates."
+        } else if (normalizedType == "observers_for_event") {
+            "\nWith area, records cover global and that area, keyed by the lower-case event name, in load order, with status (applies, disabled, overridden, merged, disabled_module, not_loaded, candidate) and, for disabled or overridden ones, statusBy (path:line of the deciding declaration); resolution gives the area, moduleOrderSource and a problem when some records stay candidates."
         } else {
             ""
         }
@@ -222,7 +225,8 @@ internal object MagentoInspectionCommands {
 
             "observers_for_event" -> MagentoEventQueries.findObserversForEvent(
                 project = project,
-                eventName = parameters.requireString("eventName")
+                eventName = parameters.requireString("eventName"),
+                area = requestedArea(queryType, parameters)
             )
 
             "layout_entities" -> MagentoViewQueries.findLayoutEntities(
@@ -303,7 +307,14 @@ internal object MagentoInspectionCommands {
                     }
                     result.records
                 }
-                else -> MagentoEventQueries.observerRecords(project, value)
+                else -> requestedArea(queryType, parameters)?.let { area ->
+                    val (records, resolutions) = MagentoEventQueries.observerResolution(project, value, area)
+                    resolution = JSONObject().put("area", area)
+                        .put("problem", resolutions.mapNotNull { it.problem?.let { problem -> "${it.event}: $problem" } }
+                            .joinToString(" ").ifEmpty { null } ?: JSONObject.NULL)
+                        .put("moduleOrderSource", resolutions.firstOrNull()?.order?.path ?: JSONObject.NULL)
+                    records
+                } ?: MagentoEventQueries.observerRecords(project, value)
             }
             MagentoInspectionResults.respond(project, queryType, query, records, options, resolution)
         } catch (exception: MissingParameterException) {
@@ -318,13 +329,13 @@ internal object MagentoInspectionCommands {
     }
 
     /** Query types whose `area` names the area to resolve for, instead of the shared area filter. */
-    private val resolvingTypes = setOf("preference_resolution", "plugins_for_method")
+    private val resolvingTypes = setOf("preference_resolution", "plugins_for_method", "observers_for_event")
 
     /** Parameters without this query's own `area`, which is not the shared area filter. */
     private fun optionParameters(queryType: String, parameters: JSONObject): JSONObject =
         if (queryType in resolvingTypes) JSONObject(parameters.toMap() - "area") else parameters
 
-    /** The area to resolve for: global by default for preferences, none by default for plugins; null for other types. */
+    /** The area to resolve for: global by default for preferences, none by default for plugins and observers; null for other types. */
     private fun requestedArea(queryType: String, parameters: JSONObject): String? {
         if (queryType !in resolvingTypes) return null
         val value = parameters.opt("area")
@@ -407,8 +418,9 @@ internal object MagentoInspectionCommands {
             queryType: observers_for_event
             Finds observer declarations for a Magento event.
             Required: eventName. Use a full event name such as `catalog_product_save_after` or a partial search such as `product_save`.
+            Optional: area, such as global, frontend, adminhtml, webapi_rest, graphql or crontab. Without it, the reply lists the declarations of every area. With it, the reply lists the observers Magento runs for each matching event in that area, merged as Magento merges them: global, then the area's events.xml files, by observer name in app/etc/config.php module order; a later `instance` replaces an earlier one, and `disabled="true"` disables the observer, which a later `disabled="false"` re-enables only within the same stage. Each declaration gets a status: applies for observers that run; disabled, overridden, disabled_module or not_loaded for those that do not; merged for a declaration without instance that only changes attributes; candidate when the module order is unknown and decides the result.
             Example parametersJson:
-            {"eventName":"catalog_product_save_after"}
+            {"eventName":"checkout_submit_all_after","area":"frontend"}
         """.trimIndent()
 
         "layout_entities" -> """
