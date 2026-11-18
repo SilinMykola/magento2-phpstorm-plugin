@@ -77,7 +77,7 @@ internal object MagentoObserverResolution {
                 val type = entry.type ?: continue
                 fates[type] = when {
                     entry.disabledBy != null -> Fate("disabled", entry.disabledBy)
-                    type.declaredInstance.isNullOrEmpty() -> Fate("merged")
+                    type.declaredInstance.isNullOrEmpty() -> Fate("no_instance")
                     else -> Fate("applies")
                 }
             }
@@ -90,8 +90,10 @@ internal object MagentoObserverResolution {
                     problems += "Whether and which class runs for the observers ${undecided.joinToString(", ")} depends on " +
                         "the module order, which is unknown: ${order.problem}"
                 }
-                val shared = loaded.groupBy { it.record.observerName }
-                    .filter { (name, items) -> name !in undecided && items.mapTo(hashSetOf()) { it.place.module }.size > 1 }.keys
+                // Across stages the stage order decides; only modules within one stage follow the unknown order.
+                val shared = loaded.groupBy { it.record.observerName }.filter { (name, items) ->
+                    name !in undecided && items.groupBy { it.place.stage }.values.any { stage -> stage.mapTo(hashSetOf()) { it.place.module }.size > 1 }
+                }.keys
                 if (shared.isNotEmpty()) {
                     problems += "The results of ${shared.sorted().joinToString(", ")} do not depend on the module order, " +
                         "but the declaration named in statusBy follows the path order."

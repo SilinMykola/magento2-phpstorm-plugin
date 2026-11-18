@@ -135,6 +135,8 @@ class MagentoObserverResolutionTest : MagentoDiResolutionTestCase() {
         assertTrue(many_.toString(), many_.contains("applies:own_M1:M1"))
         // Above five modules for one name, it stays undecided.
         assertEquals(6, many_.count { it.startsWith("candidate:crowd:") })
+        // core_obs is overridden in another stage, so statusBy does not depend on the path order.
+        assertFalse(records("frontend", "acme_many").getJSONObject("resolution").getString("problem").contains("The results of"))
         val cross = statuses("frontend", "acme_cross")
         assertTrue(cross.toString(), cross.contains("disabled:x:X<B/etc/events.xml:3") || cross.contains("disabled:x:X<A/etc/frontend/events.xml:2"))
         // The same class from two modules runs in either order.
@@ -168,7 +170,7 @@ class MagentoObserverResolutionTest : MagentoDiResolutionTestCase() {
         PsiDocumentManager.getInstance(project).commitAllDocuments()
         config("Acme_First" to 1)
 
-        assertEquals(listOf("merged:ghost:-", "merged:blank:-", "applies:real:Real", "applies:upper:Upper", "not_loaded:primary:Primary"),
+        assertEquals(listOf("merged:ghost:-", "no_instance:blank:-", "applies:real:Real", "applies:upper:Upper", "not_loaded:primary:Primary"),
             statuses("global", "acme_ghost").sortedBy { if (it.startsWith("not_loaded")) 1 else 0 })
         assertContains(records("global", "acme_ghost").getJSONObject("resolution").getString("problem"),
             "The observers blank, ghost have no instance after merging, so Magento fails when it dispatches this event.")
@@ -176,7 +178,7 @@ class MagentoObserverResolutionTest : MagentoDiResolutionTestCase() {
         val upper = records(null, "acme_ghost").getJSONArray("records").let { list -> (0 until list.length()).map(list::getJSONObject) }
             .single { it.getString("observerName") == "upper" }
         assertFalse(upper.getBoolean("disabled"))
-        assertTrue(statuses("frontend", "acme_ghost").contains("overridden:real:Real<First/etc/frontend/events.xml:2"))
+        assertTrue(statuses("frontend", "acme_ghost").containsAll(listOf("overridden:real:Real<First/etc/frontend/events.xml:2", "no_instance:real:-")))
         assertContains(records("frontend", "acme_ghost").getJSONObject("resolution").getString("problem"), "The observers blank, ghost, real have no instance")
     }
 
