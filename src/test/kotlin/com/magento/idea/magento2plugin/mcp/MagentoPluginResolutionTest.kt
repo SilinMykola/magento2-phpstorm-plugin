@@ -116,6 +116,25 @@ class MagentoPluginResolutionTest : MagentoDiResolutionTestCase() {
         }
     }
 
+    fun testModuleAtProjectRootIsLoaded() {
+        module("Acme_First")
+        listOf("RootFirst", "RootOwn", "RootFront").forEach(::plugin)
+        file("app/code/Acme/First/Model/RootTarget.php",
+            "<?php\nnamespace Acme;\n\nclass RootTarget\n{\n    public function execute()\n    {\n    }\n}\n")
+        di("app/code/Acme/First/etc/di.xml", """<type name="Acme\RootTarget"><plugin name="shared" type="Acme\Plugin\RootFirst"/></type>""")
+        myFixture.addFileToProject("etc/module.xml", "<config><module name=\"Acme_Root\"/></config>")
+        myFixture.addFileToProject("etc/di.xml",
+            """<config><type name="Acme\RootTarget"><plugin name="shared" type="Acme\Plugin\RootOwn"/></type></config>""")
+        myFixture.addFileToProject("etc/frontend/di.xml",
+            """<config><type name="Acme\RootTarget"><plugin name="front" type="Acme\Plugin\RootFront"/></type></config>""")
+        PsiDocumentManager.getInstance(project).commitAllDocuments()
+        config("Acme_First" to 1, "Acme_Root" to 1)
+
+        assertEquals(listOf("applies:RootOwn", "overridden:RootFirst<etc/di.xml:1"), statuses("global", "Acme\\\\RootTarget"))
+        assertEquals(listOf("applies:RootOwn", "applies:RootFront", "overridden:RootFirst<etc/di.xml:1"),
+            statuses("frontend", "Acme\\\\RootTarget"))
+    }
+
     fun testAreaMergeFollowsMagento() {
         addDeclarations()
         config("Acme_First" to 1, "Acme_Second" to 1, "Acme_Off" to 0)

@@ -43,7 +43,8 @@ internal object MagentoPluginResolution {
         val order = MagentoPreferenceResolution.moduleOrder(project)
         val owners = MagentoMcpSnapshots.moduleOwners(project)
         val declarations = MagentoMcpSnapshots.diSnapshot(project).pluginDeclarations
-        return Merge(area, order, owners, declarations, parents).run(MagentoMcpSupport.normalizeFqn(targetFqn))
+        val rootModule = MagentoInspectionResults.rootModule(project, owners)
+        return Merge(area, order, owners, declarations, parents, rootModule).run(MagentoMcpSupport.normalizeFqn(targetFqn))
     }
 
     internal class Merge(
@@ -51,7 +52,8 @@ internal object MagentoPluginResolution {
         private val order: MagentoPreferenceResolution.ModuleOrder,
         private val owners: Map<String, String>,
         private val declarations: Map<String, List<PluginDeclarationRecord>>,
-        parents: (String) -> List<String>
+        parents: (String) -> List<String>,
+        private val rootModule: MagentoInspectionResults.RootModuleFiles? = null
     ) {
         /**
          * One plugin name after merging; [disabledSet] says a declaration set `disabled`, and [disabledBy] is the one
@@ -190,7 +192,7 @@ internal object MagentoPluginResolution {
 
         /** The same declarations merged with their modules in every order; a module's own files keep their order. */
         private fun moduleOrders(group: List<PluginDeclarationRecord>): List<List<PluginDeclarationRecord>> {
-            val byModule = group.groupBy { owners.ownerOf(it.filePath) }.values.toList()
+            val byModule = group.groupBy { MagentoInspectionResults.ownerOf(it.filePath, owners, rootModule) }.values.toList()
             if (byModule.size < 2 || byModule.size > MAX_PERMUTED_MODULES) return listOf(group)
             fun permutations(items: List<List<PluginDeclarationRecord>>): List<List<List<PluginDeclarationRecord>>> =
                 if (items.size < 2) listOf(items) else items.flatMap { first -> permutations(items - listOf(first)).map { listOf(first) + it } }
@@ -203,7 +205,7 @@ internal object MagentoPluginResolution {
          */
         private fun placed(type: String): Map<Int, Map<String, List<PluginDeclarationRecord>>> = placedCache.getOrPut(type) {
             declarations[type].orEmpty().mapNotNull { declaration ->
-                val place = MagentoPreferenceResolution.place(declaration.filePath, area, order, owners) ?: return@mapNotNull null
+                val place = MagentoPreferenceResolution.place(declaration.filePath, area, order, owners, rootModule) ?: return@mapNotNull null
                 if (place.status != "candidate") {
                     if (declaration.pluginType != null) fates[declaration] = Fate(place.status)
                     return@mapNotNull null
@@ -257,8 +259,6 @@ internal object MagentoPluginResolution {
         private fun decide(declaration: PluginDeclarationRecord, status: String, by: PluginDeclarationRecord) {
             fates[declaration] = Fate(status, by)
         }
-
-        private fun Map<String, String>.ownerOf(path: String): String? = MagentoInspectionResults.ownerOf(path, this)
 
         private fun ((String) -> List<String>).memoized(): (String) -> List<String> {
             val cache = hashMapOf<String, List<String>>()

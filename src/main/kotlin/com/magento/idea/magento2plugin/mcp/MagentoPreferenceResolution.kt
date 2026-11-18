@@ -65,8 +65,9 @@ internal object MagentoPreferenceResolution {
         val query = MagentoMcpSupport.normalizeFqn(className)
         val order = moduleOrder(project)
         val owners = MagentoMcpSnapshots.moduleOwners(project)
+        val rootModule = MagentoInspectionResults.rootModule(project, owners)
         val preferences = MagentoMcpSnapshots.diSnapshot(project).preferencesFor
-        fun decideFor(type: String) = decide(preferences[type].orEmpty(), area, order, owners)
+        fun decideFor(type: String) = decide(preferences[type].orEmpty(), area, order, owners, rootModule)
         val first = decideFor(query)
         val chain = mutableListOf<String>()
         var reason = first.reason
@@ -101,10 +102,11 @@ internal object MagentoPreferenceResolution {
         records: List<PreferenceRecord>,
         area: String,
         order: ModuleOrder,
-        owners: Map<String, String>
+        owners: Map<String, String>,
+        rootModule: MagentoInspectionResults.RootModuleFiles?
     ): Decision {
         val candidates = records.mapNotNull { record ->
-            val place = place(record.filePath, area, order, owners) ?: return@mapNotNull null
+            val place = place(record.filePath, area, order, owners, rootModule) ?: return@mapNotNull null
             Candidate(record, place.module, place.status, place.stage, place.position)
         }
         if (candidates.isEmpty()) {
@@ -141,7 +143,13 @@ internal object MagentoPreferenceResolution {
      * Load position of a declaration in [area]: stage 0 for app/etc/di.xml, 1 for global module files,
      * 2 for the area's module files; null for files of other areas.
      */
-    fun place(filePath: String, area: String, order: ModuleOrder, owners: Map<String, String>): Placement? {
+    fun place(
+        filePath: String,
+        area: String,
+        order: ModuleOrder,
+        owners: Map<String, String>,
+        rootModule: MagentoInspectionResults.RootModuleFiles? = null
+    ): Placement? {
         val scope = MagentoMcpSupport.determineConfigScope(filePath, ModuleDiXml.FILE_NAME)
         val directory = filePath.substringBeforeLast('/', "")
         val primary = filePath.endsWith("app/etc/" + ModuleDiXml.FILE_NAME) && owners.ownerOf(filePath) == null
@@ -156,7 +164,7 @@ internal object MagentoPreferenceResolution {
             area -> 2
             else -> return null
         }
-        val moduleDirectory = MagentoInspectionResults.ownerDirectory(filePath, owners)
+        val moduleDirectory = MagentoInspectionResults.ownerDirectory(filePath, owners, rootModule)
         val module = moduleDirectory?.let(owners::get)
         // Magento reads only <module>/etc/di.xml and <module>/etc/<area>/di.xml, not copies such as test fixtures.
         val inModule = filePath.removePrefix("$moduleDirectory/")

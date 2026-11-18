@@ -97,8 +97,7 @@ internal object MagentoInspectionResults {
     ): String {
         val owners = if (records.isEmpty()) emptyMap() else MagentoMcpSnapshots.moduleOwners(project)
         // Records of a module at the project root are filtered out anyway when another module is requested.
-        val rootModule = owners[""]?.takeIf { options.module == null || options.module == it }
-            ?.let { RootModuleFiles(project, it) }
+        val rootModule = owners[""]?.takeIf { options.module == null || options.module == it }?.let { rootModule(project, owners) }
         val owned = records.map { it to (it.module ?: ownerOf(it.path, owners, rootModule) ?: it.moduleHint) }
         val matching = owned.filter { (record, module) ->
             (options.module == null || module == options.module) &&
@@ -136,6 +135,10 @@ internal object MagentoInspectionResults {
         .put("line", record.line ?: JSONObject.NULL).put("module", module ?: JSONObject.NULL)
         .put("area", record.area ?: JSONObject.NULL)
         .apply { record.fields.forEach { (name, value) -> put(name, value ?: JSONObject.NULL) } }
+
+    /** Ownership for a module at the project root, or null when no module is there. */
+    fun rootModule(project: Project, owners: Map<String, String>): RootModuleFiles? =
+        owners[""]?.let { RootModuleFiles(project, it) }
 
     /** The nearest enclosing module directory, so a nested module owns its own files. */
     fun ownerOf(path: String?, owners: Map<String, String>, rootModule: RootModuleFiles? = null): String? =

@@ -49,6 +49,21 @@ class MagentoPreferenceResolutionTest : MagentoDiResolutionTestCase() {
         assertEquals("Acme\\FromBar", resolve("Acme\\Api").effectiveType)
     }
 
+    fun testModuleAtProjectRootIsLoaded() {
+        module("Acme_First")
+        di("app/code/Acme/First/etc/di.xml", "Acme\\RootApi" to "Acme\\FirstGlobal")
+        myFixture.addFileToProject("etc/module.xml", "<config><module name=\"Acme_Root\"/></config>")
+        myFixture.addFileToProject("etc/di.xml", "<config><preference for=\"Acme\\RootApi\" type=\"Acme\\RootGlobal\"/></config>")
+        myFixture.addFileToProject("etc/frontend/di.xml", "<config><preference for=\"Acme\\RootApi\" type=\"Acme\\RootFront\"/></config>")
+        PsiDocumentManager.getInstance(project).commitAllDocuments()
+        config("Acme_First" to 1, "Acme_Root" to 1)
+
+        val global = resolve("Acme\\RootApi")
+        assertEquals(listOf("overridden:Acme\\FirstGlobal", "applies:Acme\\RootGlobal"), statuses(global))
+        assertEquals("Acme_Root", global.candidates.last().module)
+        assertEquals("Acme\\RootFront", resolve("Acme\\RootApi", "frontend").effectiveType)
+    }
+
     fun testChainsAreFollowedAndCyclesAreUnknown() {
         addDeclarations()
         config("Acme_First" to 1, "Acme_Second" to 1)
