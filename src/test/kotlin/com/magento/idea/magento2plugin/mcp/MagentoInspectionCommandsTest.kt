@@ -237,6 +237,13 @@ class MagentoInspectionCommandsTest : BaseProjectTestCase() {
     }
 
     @Test
+    fun testPreferenceResolutionRejectsAnInvalidAreaInText() {
+        assertContains(MagentoInspectionCommands.query(project, "preference_resolution",
+            """{"className":"Magento\\Framework\\App\\RequestInterface","area":"no area"}"""),
+            "area must be an area code")
+    }
+
+    @Test
     fun testQueriesWithoutStructuredResultsKeepTheirParameters() {
         // module_dependencies has its own limit and replies in JSON without format.
         val dependencies = MagentoInspectionCommands.query(project, "module_dependencies",
