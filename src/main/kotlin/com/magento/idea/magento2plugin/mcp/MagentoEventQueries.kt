@@ -75,11 +75,11 @@ internal object MagentoEventQueries {
         var truncated = events.size > MagentoMcpSupport.MAX_MATCHES
         var order: String? = null
         val scope = if (area == "global") "global" else "global or $area"
-        for (event in events.take(MagentoMcpSupport.MAX_MATCHES)) {
-            val resolution = MagentoObserverResolution.resolve(project, event, area)
+        for (resolution in MagentoObserverResolution.resolve(project, events.take(MagentoMcpSupport.MAX_MATCHES), area)) {
+            val event = resolution.event
             order = resolution.order.path
             fun describe(record: EventObserverRecord) =
-                "`${record.observerName}` ${record.declaredInstance ?: "(no instance)"} (${record.filePath}:${record.line})"
+                "`${record.observerName}` ${record.declaredInstance?.ifEmpty { null } ?: "(no instance)"} (${record.filePath}:${record.line})"
             val groups = resolution.declarations.groupBy { (_, fate) ->
                 when (fate.status) { "applies" -> 0; "candidate" -> 1; else -> 2 }
             }
@@ -116,7 +116,7 @@ internal object MagentoEventQueries {
      * Magento's merge gives them, keyed by the lower-case event name; with the problem of each undecided event.
      */
     fun observerResolution(project: Project, eventName: String, area: String): Pair<List<InspectionRecord>, List<MagentoObserverResolution.Resolution>> {
-        val resolutions = matchedEvents(project, eventName.trim()).map { MagentoObserverResolution.resolve(project, it, area) }
+        val resolutions = MagentoObserverResolution.resolve(project, matchedEvents(project, eventName.trim()), area)
         return resolutions.flatMap { resolution ->
             resolution.declarations.map { (observer, fate) ->
                 val fields = observerFields(observer)

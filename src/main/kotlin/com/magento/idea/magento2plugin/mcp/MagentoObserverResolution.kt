@@ -29,18 +29,19 @@ internal object MagentoObserverResolution {
         val order: MagentoPreferenceResolution.ModuleOrder,
         /** Declarations of global and [area] in load order, each with its fate. */
         val declarations: List<Pair<EventObserverRecord, Fate>>,
-        /** Why some declarations stay candidates; null when everything was decided. */
+        /** Why some declarations stay candidates or fail in Magento; null when there is nothing to say. */
         val problem: String?
     )
 
-    fun resolve(project: Project, event: String, area: String): Resolution {
-        val key = event.trim().lowercase()
+    /** Resolutions of [events], which are matched event names in any case, sharing one module order. */
+    fun resolve(project: Project, events: List<String>, area: String): List<Resolution> {
         val owners = MagentoMcpSnapshots.moduleOwners(project)
-        val declarations = MagentoMcpSnapshots.eventSnapshot(project).observersByEvent
-            .filterKeys { it.lowercase() == key }
-            .flatMap { (name, records) -> records.map { name to it } }
-        return Merge(area, MagentoPreferenceResolution.moduleOrder(project), owners,
-            MagentoInspectionResults.rootModule(project, owners)).run(key, declarations)
+        val byKey = MagentoMcpSnapshots.eventSnapshot(project).observersByEvent.entries.groupBy { it.key.lowercase() }
+        val merge = Merge(area, MagentoPreferenceResolution.moduleOrder(project), owners,
+            MagentoInspectionResults.rootModule(project, owners))
+        return events.map { it.trim().lowercase() }.distinct().map { key ->
+            merge.run(key, byKey[key].orEmpty().flatMap { (name, records) -> records.map { name to it } })
+        }
     }
 
     internal class Merge(
@@ -54,63 +55,91 @@ internal object MagentoObserverResolution {
 
         /** One observer name after merging; [disabledBy] is the declaration that disabled it. */
         private data class Entry(val type: EventObserverRecord?, val disabledBy: EventObserverRecord?) {
-            /** The declaration whose instance runs, or null when nothing runs under this name. */
-            val outcome: EventObserverRecord? get() = type.takeIf { disabledBy == null }
+            /** The class that runs under this name: null when it is disabled, "" when it has no instance. */
+            val outcome: String? get() = if (disabledBy != null) null else type?.declaredInstance.orEmpty()
         }
 
         private val fates = hashMapOf<EventObserverRecord, Fate>()
 
-        /** [declarations] pairs each declaration with the event name it was declared under. */
+        /** [declarations] pairs each declaration of [event] with the event name it was declared under. */
         fun run(event: String, declarations: List<Pair<String, EventObserverRecord>>): Resolution {
+            fates.clear()
             val placed = declarations.mapNotNull { (name, record) ->
                 val place = MagentoPreferenceResolution.place(record.filePath, area, order, owners, rootModule, FILE_NAME)
                     ?: return@mapNotNull null
                 Item(name, record, place)
             }.sortedWith(compareBy({ it.place.stage }, { it.place.position ?: -1 }, { it.record.filePath }, { it.record.line }))
             placed.filter { it.place.status != "candidate" }.forEach { fates[it.record] = Fate(it.place.status) }
-            val stages = placed.filter { it.place.status == "candidate" }.groupBy { it.place.stage }.toSortedMap().values.toList()
+            val loaded = placed.filter { it.place.status == "candidate" }
 
-            var merged = mapOf<String, Entry>()
-            for (stage in stages) merged = mergeStage(merged, stage, record = true)
+            val merged = merge(loaded, record = true)
             for (entry in merged.values) {
                 val type = entry.type ?: continue
-                fates[type] = entry.disabledBy?.let { Fate("disabled", it) } ?: Fate("applies")
-            }
-            val undecided = if (order.known) emptySet() else undecidedNames(stages, merged)
-            for (item in stages.flatten()) {
-                if (item.record.observerName in undecided && item.record.declaredInstance != null) {
-                    fates[item.record] = Fate("candidate")
+                fates[type] = when {
+                    entry.disabledBy != null -> Fate("disabled", entry.disabledBy)
+                    type.declaredInstance.isNullOrEmpty() -> Fate("merged")
+                    else -> Fate("applies")
                 }
             }
-            val problem = undecided.takeIf { it.isNotEmpty() }?.let {
-                "Several modules declare observers named ${it.sorted().joinToString(", ")} for this event in the same " +
-                    "stage, and the module order is unknown: ${order.problem}"
+            val problems = mutableListOf<String>()
+            if (!order.known) {
+                val undecided = undecidedNames(loaded, merged)
+                loaded.filter { it.record.observerName in undecided && it.record.declaredInstance != null }
+                    .forEach { fates[it.record] = Fate("candidate") }
+                if (undecided.isNotEmpty()) {
+                    problems += "Whether and which class runs for the observers ${undecided.joinToString(", ")} depends on " +
+                        "the module order, which is unknown: ${order.problem}"
+                }
+                val shared = loaded.groupBy { it.record.observerName }
+                    .filter { (name, items) -> name !in undecided && items.mapTo(hashSetOf()) { it.place.module }.size > 1 }.keys
+                if (shared.isNotEmpty()) {
+                    problems += "The results of ${shared.sorted().joinToString(", ")} do not depend on the module order, " +
+                        "but the declaration named in statusBy follows the path order."
+                }
             }
-            return Resolution(event, area, order, placed.map { it.record to (fates[it.record] ?: Fate("merged")) }, problem)
+            val missing = merged.filterValues { it.disabledBy == null && it.type?.declaredInstance.isNullOrEmpty() }.keys
+                .filter { name -> loaded.none { it.record.observerName == name && fates[it.record]?.status == "candidate" } }
+            if (missing.isNotEmpty()) {
+                problems += "The observers ${missing.sorted().joinToString(", ")} have no instance after merging, so Magento " +
+                    "fails when it dispatches this event."
+            }
+            return Resolution(event, area, order, placed.map { it.record to (fates[it.record] ?: Fate("merged")) },
+                problems.joinToString(" ").ifEmpty { null })
         }
 
-        /** Names whose outcome differs between module orders; above [MAX_PERMUTED_MODULES] every shared name. */
-        private fun undecidedNames(stages: List<List<Item>>, found: Map<String, Entry>): Set<String> {
+        /** Merges loaded declarations, already in load order, stage by stage. */
+        private fun merge(items: List<Item>, record: Boolean): Map<String, Entry> {
+            var merged = mapOf<String, Entry>()
+            for (stage in items.groupBy { it.place.stage }.toSortedMap().values) merged = mergeStage(merged, stage, record)
+            return merged
+        }
+
+        /**
+         * Observer names whose outcome differs between module orders. One order applies to both stages. Observer
+         * names merge independently unless a stage has event names that differ only by case, which replace each other
+         * whole; then every name of the event is decided together. Above [MAX_PERMUTED_MODULES] modules a name
+         * declared by several modules stays undecided.
+         */
+        private fun undecidedNames(items: List<Item>, found: Map<String, Entry>): Set<String> {
+            val caseVariants = items.groupBy { it.place.stage }.values.any { stage -> stage.mapTo(hashSetOf()) { it.event }.size > 1 }
+            val groups = if (caseVariants) listOf(items) else items.groupBy { it.record.observerName }.values
             val result = sortedSetOf<String>()
-            val orders = stages.map { stage ->
-                val byModule = stage.groupBy { it.place.module }.values.toList()
-                if (byModule.size > MAX_PERMUTED_MODULES) {
-                    result += stage.groupBy { it.record.observerName }
-                        .filterValues { items -> items.mapTo(hashSetOf()) { it.place.module }.size > 1 }.keys
-                    listOf(stage)
-                } else {
-                    permutations(byModule).map { it.flatten() }
+            for (group in groups) {
+                val modules = group.mapTo(linkedSetOf()) { it.place.module }.toList()
+                if (modules.size < 2) continue
+                val names = group.mapTo(hashSetOf()) { it.record.observerName }
+                if (modules.size > MAX_PERMUTED_MODULES) {
+                    result += names
+                    continue
+                }
+                for (permutation in permutations(modules)) {
+                    ProgressManager.checkCanceled()
+                    val rank = permutation.withIndex().associate { it.value to it.index }
+                    val merged = merge(group.sortedWith(compareBy({ it.place.stage }, { rank.getValue(it.place.module) },
+                        { it.record.filePath }, { it.record.line })), record = false)
+                    names.filterTo(result) { merged[it]?.outcome != found[it]?.outcome }
                 }
             }
-            fun visit(index: Int, merged: Map<String, Entry>) {
-                ProgressManager.checkCanceled()
-                if (index == orders.size) {
-                    (merged.keys + found.keys).filterTo(result) { merged[it]?.outcome !== found[it]?.outcome }
-                    return
-                }
-                orders[index].forEach { visit(index + 1, mergeStage(merged, it, record = false)) }
-            }
-            visit(0, emptyMap())
             return result
         }
 
@@ -149,6 +178,6 @@ internal object MagentoObserverResolution {
 
     private const val FILE_NAME = "events.xml"
 
-    /** Above this many modules in one stage, observer names they share are reported as candidates. */
+    /** Above this many modules for one observer name, the name stays undecided when the module order is unknown. */
     private const val MAX_PERMUTED_MODULES = 5
 }

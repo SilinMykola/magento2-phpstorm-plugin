@@ -101,11 +101,83 @@ class MagentoObserverResolutionTest : MagentoDiResolutionTestCase() {
         addDeclarations()
 
         val reply = records("global")
-        assertContains(reply.getJSONObject("resolution").getString("problem"), "acme_save: Several modules declare observers named back, shared for this event")
+        assertContains(reply.getJSONObject("resolution").getString("problem"), "acme_save: Whether and which class runs for the observers back, shared depends on the module order")
         val statuses = statuses("global")
         // inventory is disabled in either order, so it is decided.
         assertTrue(statuses.toString(), statuses.containsAll(listOf("candidate:shared:SharedFirst", "candidate:shared:SharedSecond", "candidate:back:Back",
             "disabled:inventory:Inventory<Second/etc/events.xml:3", "applies:one:One")))
+    }
+
+    fun testUnknownModuleOrderDecidesEachObserverOnItsOwn() {
+        val many = (1..6).map { "Acme_M$it" }
+        (many + listOf("Acme_First", "Acme_A", "Acme_B")).forEach(::module)
+        many.forEach { name ->
+            val short = name.substringAfter('_')
+            events("app/code/Acme/$short/etc/events.xml", """<event name="acme_many">""",
+                """<observer name="own_$short" instance="Acme\Observer\$short"/>""",
+                """<observer name="crowd" instance="Acme\Observer\Crowd$short"/>""", "</event>")
+        }
+        events("app/code/Acme/First/etc/events.xml", """<event name="acme_many">""",
+            """<observer name="core_obs" instance="Acme\Observer\Core"/>""", "</event>")
+        events("app/code/Acme/M1/etc/frontend/events.xml", """<event name="acme_many"><observer name="core_obs" disabled="true"/></event>""")
+        // One module order applies to both stages: A disables x in global for AB, in frontend for BA.
+        events("app/code/Acme/A/etc/events.xml", """<event name="acme_cross">""",
+            """<observer name="x" instance="Acme\Observer\X" disabled="false"/>""", """<observer name="same" instance="Acme\Observer\Same"/>""", "</event>")
+        events("app/code/Acme/B/etc/events.xml", """<event name="acme_cross">""",
+            """<observer name="x" disabled="true"/>""", """<observer name="same" instance="Acme\Observer\Same"/>""", "</event>")
+        events("app/code/Acme/A/etc/frontend/events.xml", """<event name="acme_cross"><observer name="x" disabled="true"/></event>""")
+        events("app/code/Acme/B/etc/frontend/events.xml", """<event name="acme_cross"><observer name="x" disabled="false"/></event>""")
+        PsiDocumentManager.getInstance(project).commitAllDocuments()
+
+        val many_ = statuses("frontend", "acme_many")
+        // Six modules declare other observers; core_obs is disabled in every order.
+        assertTrue(many_.toString(), many_.contains("disabled:core_obs:Core<M1/etc/frontend/events.xml:2"))
+        assertTrue(many_.toString(), many_.contains("applies:own_M1:M1"))
+        // Above five modules for one name, it stays undecided.
+        assertEquals(6, many_.count { it.startsWith("candidate:crowd:") })
+        val cross = statuses("frontend", "acme_cross")
+        assertTrue(cross.toString(), cross.contains("disabled:x:X<B/etc/events.xml:3") || cross.contains("disabled:x:X<A/etc/frontend/events.xml:2"))
+        // The same class from two modules runs in either order.
+        assertEquals(1, cross.count { it.startsWith("applies:same:Same") })
+        assertContains(records("frontend", "acme_cross").getJSONObject("resolution").getString("problem"),
+            "The results of same, x do not depend on the module order, but the declaration named in statusBy follows the path order.")
+    }
+
+    fun testUnknownModuleOrderWithEventNamesDifferingByCase() {
+        listOf("Acme_First", "Acme_Second").forEach(::module)
+        events("app/code/Acme/First/etc/events.xml", """<event name="acme_mixed"><observer name="first" instance="Acme\Observer\First"/></event>""")
+        events("app/code/Acme/Second/etc/events.xml", """<event name="Acme_Mixed"><observer name="second" instance="Acme\Observer\Second"/></event>""")
+        PsiDocumentManager.getInstance(project).commitAllDocuments()
+
+        // The later event replaces the earlier one whole, so the module order decides which observer exists.
+        assertEquals(setOf("candidate:first:First", "candidate:second:Second"),
+            statuses("global", "acme_mixed").map { it.substringBefore('<') }.toSet())
+        assertContains(records("global", "acme_mixed").getJSONObject("resolution").getString("problem"),
+            "Whether and which class runs for the observers first, second depends on the module order")
+    }
+
+    fun testObserversWithoutInstanceAndUnreadFiles() {
+        module("Acme_First")
+        events("app/code/Acme/First/etc/events.xml", """<event name="acme_ghost">""",
+            """<observer name="ghost"/>""", """<observer name="blank" instance=""/>""", """<observer name="real" instance="Acme\Observer\Real"/>""",
+            """<observer name="upper" instance="Acme\Observer\Upper" disabled="TRUE"/>""", "</event>")
+        // An empty instance replaces the class, as in Magento.
+        events("app/code/Acme/First/etc/frontend/events.xml", """<event name="acme_ghost"><observer name="real" instance=""/></event>""")
+        // Magento reads no events.xml from app/etc.
+        events("app/etc/events.xml", """<event name="acme_ghost"><observer name="primary" instance="Acme\Observer\Primary"/></event>""")
+        PsiDocumentManager.getInstance(project).commitAllDocuments()
+        config("Acme_First" to 1)
+
+        assertEquals(listOf("merged:ghost:-", "merged:blank:-", "applies:real:Real", "applies:upper:Upper", "not_loaded:primary:Primary"),
+            statuses("global", "acme_ghost").sortedBy { if (it.startsWith("not_loaded")) 1 else 0 })
+        assertContains(records("global", "acme_ghost").getJSONObject("resolution").getString("problem"),
+            "The observers blank, ghost have no instance after merging, so Magento fails when it dispatches this event.")
+        // Only the exact value `true` disables, in the record too.
+        val upper = records(null, "acme_ghost").getJSONArray("records").let { list -> (0 until list.length()).map(list::getJSONObject) }
+            .single { it.getString("observerName") == "upper" }
+        assertFalse(upper.getBoolean("disabled"))
+        assertTrue(statuses("frontend", "acme_ghost").contains("overridden:real:Real<First/etc/frontend/events.xml:2"))
+        assertContains(records("frontend", "acme_ghost").getJSONObject("resolution").getString("problem"), "The observers blank, ghost, real have no instance")
     }
 
     fun testEventNamesDifferingByCase() {

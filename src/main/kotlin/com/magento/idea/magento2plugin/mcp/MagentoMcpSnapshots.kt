@@ -154,16 +154,18 @@ internal object MagentoMcpSnapshots {
             for (eventTag in rootTag.findSubTags("event")) {
                 val eventName = eventTag.getAttributeValue("name") ?: continue
                 for (observerTag in eventTag.findSubTags("observer")) {
-                    val instance = MagentoMcpSupport.presentableFqn(observerTag.getAttributeValue("instance"))
+                    val declaredInstance = observerTag.getAttributeValue("instance")
+                    val instance = MagentoMcpSupport.presentableFqn(declaredInstance)
                     val disabled = observerTag.getAttributeValue("disabled")
                     observersByEvent.getOrPut(eventName, ::mutableListOf) += EventObserverRecord(
                         filePath = filePath,
                         line = lines.lineOf(observerTag),
                         observerName = observerTag.getAttributeValue("name") ?: "-",
                         observerInstance = instance ?: "-",
-                        disabled = disabled.equals("true", ignoreCase = true),
-                        declaredInstance = instance,
                         // Magento's converter disables an observer only for the exact value `true`.
+                        disabled = disabled == "true",
+                        // An empty instance still replaces an earlier one, as in Magento.
+                        declaredInstance = declaredInstance?.let { instance.orEmpty() },
                         declaredDisabled = disabled?.let { it == "true" }
                     )
                 }
@@ -341,7 +343,7 @@ internal data class EventObserverRecord(
     val observerName: String,
     val observerInstance: String,
     val disabled: Boolean,
-    /** The `instance` attribute; null when it is absent, so an earlier declaration's class stays. */
+    /** The `instance` attribute, empty when it is blank; null when it is absent, so an earlier declaration's class stays. */
     val declaredInstance: String? = null,
     /** Whether a `disabled` attribute disables the observer; null when it is absent. */
     val declaredDisabled: Boolean? = null
