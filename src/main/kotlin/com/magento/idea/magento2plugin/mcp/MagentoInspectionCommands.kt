@@ -34,7 +34,7 @@ internal object MagentoInspectionCommands {
         "layout_entities" to setOf("module", "area", "path"),
         "ui_component" to setOf("module", "area", "path"),
         "acl_or_menu" to setOf("module", "area", "path"),
-        "plugins_for_method" to setOf("module", "area", "path"),
+        "plugins_for_method" to setOf("module", "path"),
         // `area` is this query's own parameter, the area to resolve.
         "preference_resolution" to setOf("module", "path")
     )
@@ -109,7 +109,7 @@ internal object MagentoInspectionCommands {
             Example parametersJson:
             {"$parameter":"…",${if (normalizedType == "plugins_for_method") "\"methodName\":\"…\"," else ""}"format":"json","limit":50}
         """.trimIndent() + if (normalizedType == "plugins_for_method") {
-            "\nPlugin records point at the di.xml declaration like di_config plugin records (name, type, sortOrder); method, pluginKind (before, around, after), target, methodPath and methodLine describe the matched plugin method."
+            "\nPlugin records point at the di.xml declaration like di_config plugin records (name, type, sortOrder); method, pluginKind (before, around, after), target, methodPath and methodLine describe the matched plugin method. With area, records also have status (applies, disabled, overridden, disabled_module, not_loaded, candidate) and, for disabled or overridden ones, statusBy (path:line of the deciding declaration); sortOrder is the one Magento uses, and resolution gives the area, moduleOrderSource and a problem when some records stay candidates."
         } else {
             ""
         }
@@ -182,7 +182,8 @@ internal object MagentoInspectionCommands {
             "plugins_for_method" -> MagentoDiQueries.findPluginsForMethod(
                 project = project,
                 className = parameters.requireString("className"),
-                methodName = parameters.requireString("methodName")
+                methodName = parameters.requireString("methodName"),
+                area = requestedArea(queryType, parameters)
             )
 
             "observers_for_event" -> MagentoEventQueries.findObserversForEvent(
@@ -208,7 +209,7 @@ internal object MagentoInspectionCommands {
             "preference_resolution" -> MagentoDiQueries.findPreferenceResolution(
                 project = project,
                 className = parameters.requireString("className"),
-                area = requestedArea(queryType, parameters)
+                area = requestedArea(queryType, parameters)!!
             )
 
             else -> unknownTypeMessage(queryType)
@@ -245,15 +246,23 @@ internal object MagentoInspectionCommands {
             val value = parameters.requireString(queryParameter)
             var resolution: JSONObject? = null
             val records = when (queryType) {
-                "preference_resolution" -> MagentoPreferenceResolution.resolve(project, value, requestedArea(queryType, parameters))
+                "preference_resolution" -> MagentoPreferenceResolution.resolve(project, value, requestedArea(queryType, parameters)!!)
                     .also { resolution = it.summary() }.let(MagentoDiQueries::preferenceRecords)
                 "module" -> MagentoModuleQueries.moduleRecords(project, value)
                 "di_config" -> MagentoDiQueries.diConfigRecords(project, value)
                 "layout_entities" -> MagentoViewQueries.layoutRecords(project, value)
                 "ui_component" -> MagentoViewQueries.uiComponentRecords(project, value)
                 "acl_or_menu" -> MagentoViewQueries.aclOrMenuRecords(project, value)
-                "plugins_for_method" -> MagentoDiQueries.pluginRecords(project, value, parameters.requireString("methodName"))
-                    ?: return status("unavailable", "The registered `plugins_for_method` provider returns text only. Omit format to get text.", options)
+                "plugins_for_method" -> {
+                    val result = MagentoDiQueries.pluginRecords(project, value, parameters.requireString("methodName"), requestedArea(queryType, parameters))
+                        ?: return status("unavailable", "The registered `plugins_for_method` provider returns text only. Omit format to get text.", options)
+                    resolution = result.resolution?.let { merge ->
+                        JSONObject().put("area", merge.area)
+                            .put("problem", merge.problem ?: JSONObject.NULL)
+                            .put("moduleOrderSource", merge.order.path ?: JSONObject.NULL)
+                    }
+                    result.records
+                }
                 else -> MagentoEventQueries.observerRecords(project, value)
             }
             MagentoInspectionResults.respond(project, queryType, query, records, options, resolution)
@@ -268,17 +277,22 @@ internal object MagentoInspectionCommands {
         }
     }
 
+    /** Query types whose `area` names the area to resolve for, instead of the shared area filter. */
+    private val resolvingTypes = setOf("preference_resolution", "plugins_for_method")
+
     /** Parameters without this query's own `area`, which is not the shared area filter. */
     private fun optionParameters(queryType: String, parameters: JSONObject): JSONObject =
-        if (queryType == "preference_resolution") JSONObject(parameters.toMap() - "area") else parameters
+        if (queryType in resolvingTypes) JSONObject(parameters.toMap() - "area") else parameters
 
-    private fun requestedArea(queryType: String, parameters: JSONObject): String {
-        if (queryType != "preference_resolution") return ""
+    /** The area to resolve for: global by default for preferences, none by default for plugins; null for other types. */
+    private fun requestedArea(queryType: String, parameters: JSONObject): String? {
+        if (queryType !in resolvingTypes) return null
         val value = parameters.opt("area")
         if (value != null && value !is String) {
             throw InvalidInspectionRequest("area must be a string such as `frontend`.")
         }
-        val area = (value as String?)?.trim()?.lowercase()?.ifEmpty { null } ?: "global"
+        val area = (value as String?)?.trim()?.lowercase()?.ifEmpty { null }
+            ?: return if (queryType == "preference_resolution") "global" else null
         if (!MagentoPreferenceResolution.validArea(area)) {
             throw InvalidInspectionRequest("area must be an area code such as `global`, `frontend`, `adminhtml`, `webapi_rest` or `graphql`.")
         }
@@ -331,8 +345,9 @@ internal object MagentoInspectionCommands {
             queryType: plugins_for_method
             Finds Magento plugins that intercept a target class or interface method.
             Required: className, methodName. methodName must be the bare PHP method name, such as `save` or `getById`, without `before`, `around`, or `after` prefixes.
+            Optional: area, such as global, frontend, adminhtml, webapi_rest or graphql. Without it, the reply lists the declarations of every area. With it, the reply lists the plugins Magento runs in that area, merged as Magento merges them: global and area di.xml files by plugin name in app/etc/config.php module order, a class's parent classes and interfaces before the class itself, `disabled="true"` removing a plugin. For an interface it covers only the interface's own declarations, as Magento does; query the implementing class to see what runs. Each record gets a status: applies for plugins that run, listed in Magento's order; disabled, overridden, disabled_module or not_loaded for those that do not; candidate when the module order is unknown, or when Magento's own result depends on the order in which it first builds parent plugin lists.
             Example parametersJson:
-            {"className":"Magento\\Catalog\\Api\\ProductRepositoryInterface","methodName":"save"}
+            {"className":"Magento\\Catalog\\Model\\ProductRepository","methodName":"save","area":"frontend"}
         """.trimIndent()
 
         "observers_for_event" -> """

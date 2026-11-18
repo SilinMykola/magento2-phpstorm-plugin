@@ -26,5 +26,9 @@ interface MagentoMethodPluginQueryProvider {
 
 /** Structured `plugins_for_method` results; a provider without it answers `format: json` with `unavailable`. */
 internal interface MagentoMethodPluginRecordProvider {
-    fun pluginRecords(project: Project, className: String, methodName: String): List<InspectionRecord>
+    /** With [area], the records carry the status Magento's merge gives each declaration in that area. */
+    fun pluginRecords(project: Project, className: String, methodName: String, area: String? = null): PluginRecords
 }
+
+/** Plugin records, and the area merge that decided their status when an area was requested. */
+internal class PluginRecords(val records: List<InspectionRecord>, val resolution: MagentoPluginResolution.Resolution?)

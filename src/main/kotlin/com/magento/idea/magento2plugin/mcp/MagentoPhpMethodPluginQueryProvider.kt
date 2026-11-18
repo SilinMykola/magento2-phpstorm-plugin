@@ -14,6 +14,6 @@ internal class MagentoPhpMethodPluginQueryProvider : MagentoMethodPluginQueryPro
     override fun findPluginsForMethod(project: Project, className: String, methodName: String): String =
         MagentoPhpDiQueries.findPluginsForMethod(project, className, methodName)
 
-    override fun pluginRecords(project: Project, className: String, methodName: String): List<InspectionRecord> =
-        MagentoPhpDiQueries.pluginRecords(project, className, methodName)
+    override fun pluginRecords(project: Project, className: String, methodName: String, area: String?): PluginRecords =
+        MagentoPhpDiQueries.pluginRecords(project, className, methodName, area)
 }

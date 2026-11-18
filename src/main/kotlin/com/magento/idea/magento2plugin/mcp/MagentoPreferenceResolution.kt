@@ -26,7 +26,10 @@ internal object MagentoPreferenceResolution {
     private val AREA = Regex("[a-z][a-z_]*")
 
     /** Enabled state and position of each module in `app/etc/config.php`; [path] is null when it was not found. */
-    data class ModuleOrder(val path: String?, val modules: Map<String, Int>, val enabled: Set<String>, val problem: String?)
+    data class ModuleOrder(val path: String?, val modules: Map<String, Int>, val enabled: Set<String>, val problem: String?) {
+        /** Whether the order can decide between modules. */
+        val known: Boolean get() = path != null && problem == null
+    }
 
     data class Candidate(
         val record: PreferenceRecord,
@@ -100,35 +103,14 @@ internal object MagentoPreferenceResolution {
         order: ModuleOrder,
         owners: Map<String, String>
     ): Decision {
-        val primaryDirectory = order.path?.substringBeforeLast('/')
-        val relevant = records.mapNotNull { record ->
-            val scope = MagentoMcpSupport.determineConfigScope(record.filePath, ModuleDiXml.FILE_NAME)
-            val directory = record.filePath.substringBeforeLast('/', "")
-            val primary = record.filePath.endsWith("app/etc/" + ModuleDiXml.FILE_NAME) && owners.ownerOf(record.filePath) == null
-            // Magento reads <root>/app/etc/di.xml; copies such as vendor/magento/magento2-base/app/etc/di.xml are not loaded.
-            val loadedPrimary = if (primaryDirectory != null) directory == primaryDirectory else "vendor" !in directory.split('/')
-            when {
-                primary -> Triple(record, null as String?, if (loadedPrimary) 0 else -1)
-                scope == "global" -> Triple(record, owners.ownerOf(record.filePath), 1)
-                scope == area -> Triple(record, owners.ownerOf(record.filePath), 2)
-                else -> null
-            }
+        val candidates = records.mapNotNull { record ->
+            val place = place(record.filePath, area, order, owners) ?: return@mapNotNull null
+            Candidate(record, place.module, place.status, place.stage, place.position)
         }
-        if (relevant.isEmpty()) {
+        if (candidates.isEmpty()) {
             return Decision(emptyList(), null, "No preference is declared for this type in global${if (area == "global") "" else " or $area"}.")
         }
-        val known = order.path != null && order.problem == null
-        val candidates = relevant.map { (record, module, stage) ->
-            val status = when {
-                stage < 0 -> "not_loaded"
-                stage == 0 -> "candidate"
-                module == null -> "not_loaded"
-                known && module !in order.modules -> "not_loaded"
-                known && module !in order.enabled -> "disabled_module"
-                else -> "candidate"
-            }
-            Candidate(record, module, status, stage, module?.let(order.modules::get) ?: if (stage == 0) -1 else null)
-        }
+        val known = order.known
         val loadable = candidates.filter { it.status == "candidate" }
         val loadOrder = compareBy<Candidate>({ it.stage }, { it.position ?: -1 }, { it.record.filePath }, { it.record.line })
         val winner = if (known && loadable.isNotEmpty()) loadable.maxWith(loadOrder) else null
@@ -150,6 +132,43 @@ internal object MagentoPreferenceResolution {
             }
         }.sortedWith(loadOrder)
         return Decision(decided, winner?.record?.preferenceType ?: agreed?.takeIf { !known }, reason)
+    }
+
+    /** Where a `di.xml` declaration loads; [status] is not_loaded, disabled_module, or candidate when it loads. */
+    data class Placement(val module: String?, val stage: Int, val position: Int?, val status: String)
+
+    /**
+     * Load position of a declaration in [area]: stage 0 for app/etc/di.xml, 1 for global module files,
+     * 2 for the area's module files; null for files of other areas.
+     */
+    fun place(filePath: String, area: String, order: ModuleOrder, owners: Map<String, String>): Placement? {
+        val scope = MagentoMcpSupport.determineConfigScope(filePath, ModuleDiXml.FILE_NAME)
+        val directory = filePath.substringBeforeLast('/', "")
+        val primary = filePath.endsWith("app/etc/" + ModuleDiXml.FILE_NAME) && owners.ownerOf(filePath) == null
+        // Magento reads <root>/app/etc/di.xml; copies such as vendor/magento/magento2-base/app/etc/di.xml are not loaded.
+        val primaryDirectory = order.path?.substringBeforeLast('/')
+        val loadedPrimary = if (primaryDirectory != null) directory == primaryDirectory else "vendor" !in directory.split('/')
+        if (primary) {
+            return if (loadedPrimary) Placement(null, 0, -1, "candidate") else Placement(null, -1, null, "not_loaded")
+        }
+        val stage = when (scope) {
+            "global" -> 1
+            area -> 2
+            else -> return null
+        }
+        val moduleDirectory = MagentoInspectionResults.ownerDirectory(filePath, owners)
+        val module = moduleDirectory?.let(owners::get)
+        // Magento reads only <module>/etc/di.xml and <module>/etc/<area>/di.xml, not copies such as test fixtures.
+        val inModule = filePath.removePrefix("$moduleDirectory/")
+        val expected = if (stage == 1) "etc/" + ModuleDiXml.FILE_NAME else "etc/$area/" + ModuleDiXml.FILE_NAME
+        val status = when {
+            module == null -> "not_loaded"
+            inModule != expected -> "not_loaded"
+            order.known && module !in order.modules -> "not_loaded"
+            order.known && module !in order.enabled -> "disabled_module"
+            else -> "candidate"
+        }
+        return Placement(module, stage, module?.let(order.modules::get), status)
     }
 
     /** Reads module order from the `app/etc/config.php` of the configured Magento root. */

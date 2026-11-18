@@ -102,19 +102,8 @@ internal object MagentoMcpSnapshots {
                 )
 
                 for (pluginTag in typeTag.findSubTags(ModuleDiXml.PLUGIN_TAG_NAME)) {
-                    pluginDeclarations.getOrPut(typeName, ::mutableListOf) += PluginDeclarationRecord(
-                        filePath = filePath,
-                        line = lines.lineOf(pluginTag),
-                        targetFqn = typeName,
-                        pluginName = pluginTag.getAttributeValue(ModuleDiXml.NAME_ATTR) ?: "-",
-                        pluginType = MagentoMcpSupport.presentableFqn(
-                            pluginTag.getAttributeValue(ModuleDiXml.TYPE_ATTR)
-                        ),
-                        sortOrder = pluginTag.getAttributeValue(ModuleDiXml.SORT_ORDER_ATTR)?.toIntOrNull() ?: 0,
-                        disabled = pluginTag.getAttributeValue(ModuleDiXml.DISABLED_ATTR_NAME)
-                            .equals("true", ignoreCase = true),
-                        scope = scope
-                    )
+                    pluginDeclarations.getOrPut(typeName, ::mutableListOf) +=
+                        PluginDeclarationRecord.of(pluginTag, filePath, lines.lineOf(pluginTag), typeName, scope)
                 }
             }
 
@@ -302,10 +291,38 @@ internal data class PluginDeclarationRecord(
     val targetFqn: String,
     val pluginName: String,
     val pluginType: String?,
-    val sortOrder: Int,
-    val disabled: Boolean,
+    /** The `sortOrder` attribute; null when it is absent, which Magento reads as 0. */
+    val declaredSortOrder: Int?,
+    /** The `disabled` attribute; null when it is absent, so a later declaration keeps an earlier value. */
+    val declaredDisabled: Boolean?,
     val scope: String
-) : HasFilePath
+) : HasFilePath {
+    val sortOrder: Int get() = declaredSortOrder ?: 0
+    val disabled: Boolean get() = declaredDisabled == true
+
+    companion object {
+        fun of(pluginTag: XmlTag, filePath: String, line: Int, targetFqn: String, scope: String) = PluginDeclarationRecord(
+            filePath = filePath,
+            line = line,
+            targetFqn = targetFqn,
+            pluginName = pluginTag.getAttributeValue(ModuleDiXml.NAME_ATTR) ?: "-",
+            pluginType = MagentoMcpSupport.presentableFqn(pluginTag.getAttributeValue(ModuleDiXml.TYPE_ATTR)),
+            // Magento casts the value with (int): leading digits count, anything else is 0.
+            declaredSortOrder = pluginTag.getAttributeValue(ModuleDiXml.SORT_ORDER_ATTR)?.let { value ->
+                LEADING_INT.find(value)?.value?.toIntOrNull() ?: 0
+            },
+            // Magento's BooleanUtils accepts exactly true/1 and false/0.
+            declaredDisabled = when (pluginTag.getAttributeValue(ModuleDiXml.DISABLED_ATTR_NAME)) {
+                "true", "1" -> true
+                "false", "0" -> false
+                else -> null
+            },
+            scope = scope
+        )
+
+        private val LEADING_INT = Regex("""^\s*[+-]?\d+""")
+    }
+}
 
 internal data class EventObserverRecord(
     override val filePath: String,

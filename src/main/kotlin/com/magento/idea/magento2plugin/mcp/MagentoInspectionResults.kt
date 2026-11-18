@@ -125,10 +125,13 @@ internal object MagentoInspectionResults {
         .apply { record.fields.forEach { (name, value) -> put(name, value ?: JSONObject.NULL) } }
 
     /** The nearest enclosing module directory, so a nested module owns its own files. */
-    fun ownerOf(path: String?, owners: Map<String, String>): String? {
+    fun ownerOf(path: String?, owners: Map<String, String>): String? = ownerDirectory(path, owners)?.let(owners::get)
+
+    /** The nearest directory of [path], itself included, that [owners] maps to a module. */
+    fun ownerDirectory(path: String?, owners: Map<String, String>): String? {
         var directory = path ?: return null
         while (true) {
-            owners[directory]?.let { return it }
+            if (directory in owners) return directory
             directory = directory.substringBeforeLast('/', "").ifEmpty { return null }
         }
     }

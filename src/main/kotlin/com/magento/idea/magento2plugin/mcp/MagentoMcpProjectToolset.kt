@@ -141,7 +141,8 @@ class MagentoMcpProjectToolset : McpToolset {
         "`layout_entities`, `ui_component`, `acl_or_menu`, and `preference_resolution`, which explains " +
         "which DI preference applies in an area.\n" +
         "- `plugins_for_method` additionally requires the JetBrains PHP plugin; `help` reports the " +
-        "capabilities available in this IDE.\n\n" +
+        "capabilities available in this IDE. With `area`, it lists the plugins Magento runs in that area " +
+        "and why the other declarations do not run.\n\n" +
 
         "Structured results:\n" +
         "- For every query type, add \"format\":\"json\" to parametersJson " +

@@ -123,15 +123,68 @@ internal object MagentoDiQueries {
                 moduleHint = candidate.module)
         }
 
-    /** Retains the existing query API while dispatching PHP semantics through the optional provider. */
-    fun findPluginsForMethod(project: Project, className: String, methodName: String): String {
+    /**
+     * Retains the existing query API while dispatching PHP semantics through the optional provider. Without
+     * [area] it lists declarations of every area; with it, the plugins Magento runs there.
+     */
+    fun findPluginsForMethod(project: Project, className: String, methodName: String, area: String? = null): String {
         val provider = MagentoMethodPluginQueryProvider.EP_NAME.extensionList.firstOrNull()
             ?: return MagentoMethodPluginQueryProvider.UNAVAILABLE_MESSAGE
-        return provider.findPluginsForMethod(project, className, methodName)
+        if (area == null) {
+            val text = provider.findPluginsForMethod(project, className, methodName)
+            if (!text.startsWith("Found ")) return text
+            // The note about cut results stays last, as the skill tells agents to look for it there.
+            val truncated = text.endsWith(MagentoInspectionResults.TEXT_TRUNCATED_HINT)
+            val body = text.removeSuffix(MagentoInspectionResults.TEXT_TRUNCATED_HINT).trimEnd()
+            return "$body\n\n$PLUGIN_AREA_HINT" + if (truncated) "\n\n${MagentoInspectionResults.TEXT_TRUNCATED_HINT}" else ""
+        }
+        val result = try {
+            (provider as? MagentoMethodPluginRecordProvider)?.pluginRecords(project, className, methodName, area)
+        } catch (exception: InvalidInspectionRequest) {
+            return exception.message.orEmpty()
+        } ?: return "The registered `plugins_for_method` provider does not support `area`. Omit area to list the declarations of every area."
+        return pluginAreaText(MagentoMcpSupport.normalizeFqn(className), methodName.trim(), area, result)
+    }
+
+    private const val PLUGIN_AREA_HINT =
+        "These are declarations of every area; disabled and replaced declarations elsewhere are not applied. " +
+            "Add `area` to get the plugins Magento runs in one area, with the reason for each one it does not run."
+
+    private fun pluginAreaText(className: String, methodName: String, area: String, result: PluginRecords): String {
+        val runs = result.records.filter { it.fields["status"] == "applies" }
+        val undecided = result.records.filter { it.fields["status"] == "candidate" }
+        val skipped = result.records - runs.toSet() - undecided.toSet()
+        fun describe(record: InspectionRecord) =
+            "${record.fields["type"]}::${record.fields["method"]}() as `${record.fields["name"]}` (${record.path}:${record.line}, ${record.area})"
+        val scope = if (area == "global") "global" else "global or $area"
+        val lines = mutableListOf("Plugins Magento runs for $className::$methodName() in area $area: ${runs.size} method(s).")
+        runs.take(MagentoMcpSupport.MAX_MATCHES).forEach {
+            lines += "- ${it.fields["pluginKind"]}, sortOrder ${it.fields["sortOrder"]}: ${describe(it)}"
+        }
+        if (undecided.isNotEmpty()) {
+            lines += ""
+            lines += "Undecided, may or may not run: ${undecided.size}."
+            undecided.take(MagentoMcpSupport.MAX_MATCHES).forEach { lines += "- ${describe(it)}" }
+        }
+        if (skipped.isNotEmpty()) {
+            lines += ""
+            lines += "Declared for $scope but not run: ${skipped.size}."
+            skipped.take(MagentoMcpSupport.MAX_MATCHES).forEach { record ->
+                val by = record.fields["statusBy"]?.let { if (record.fields["status"] == "disabled") "; disabled by $it" else "; replaced by $it" }.orEmpty()
+                lines += "- ${record.fields["status"]}: ${describe(record)}$by"
+            }
+        }
+        result.resolution?.problem?.let { lines += ""; lines += it }
+        result.resolution?.order?.path?.let { lines += "Module order: $it." }
+        if (listOf(runs, undecided, skipped).any { it.size > MagentoMcpSupport.MAX_MATCHES }) {
+            lines += ""
+            lines += MagentoInspectionResults.TEXT_TRUNCATED_HINT
+        }
+        return lines.joinToString("\n")
     }
 
     /** Structured plugin matches, or null when the registered provider offers only text. */
-    fun pluginRecords(project: Project, className: String, methodName: String): List<InspectionRecord>? =
+    fun pluginRecords(project: Project, className: String, methodName: String, area: String? = null): PluginRecords? =
         (MagentoMethodPluginQueryProvider.EP_NAME.extensionList.firstOrNull() as? MagentoMethodPluginRecordProvider)
-            ?.pluginRecords(project, className, methodName)
+            ?.pluginRecords(project, className, methodName, area)
 }

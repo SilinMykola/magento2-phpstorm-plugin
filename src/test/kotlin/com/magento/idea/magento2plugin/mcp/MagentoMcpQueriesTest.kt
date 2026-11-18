@@ -182,7 +182,11 @@ class MagentoMcpQueriesTest : BaseProjectTestCase() {
         assertEquals("frontend", after.getString("area"))
         assertEquals("Foo_Bar", after.getString("module"))
 
-        assertEquals(21, page(""","area":"frontend"""").getInt("total"))
+        // area resolves for that area: the global declaration runs in adminhtml, the frontend ones do not apply there.
+        val adminhtml = page(""","area":"adminhtml"""")
+        assertEquals(1, adminhtml.getInt("total"))
+        assertEquals("applies", adminhtml.getJSONArray("records").getJSONObject(0).getString("status"))
+        assertEquals("adminhtml", adminhtml.getJSONObject("resolution").getString("area"))
         assertEquals(1, page(""","module":"Magento_Catalog"""").getInt("total"))
         assertEquals(21, page(""","path":"app/code/Foo/Bar"""").getInt("total"))
         val second = page(""","cursor":"${page().getString("nextCursor")}"""")

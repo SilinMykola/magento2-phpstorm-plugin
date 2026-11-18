@@ -4,47 +4,14 @@
  */
 package com.magento.idea.magento2plugin.mcp
 
-import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.psi.PsiDocumentManager
-import com.magento.idea.magento2plugin.BaseProjectTestCase
 import org.json.JSONObject
 
-class MagentoPreferenceResolutionTest : BaseProjectTestCase() {
-    private lateinit var root: String
-
-    override fun setUp() {
-        super.setUp()
-        val bar2 = JSONObject(MagentoInspectionCommands.query(project, "module", """{"moduleName":"Foo_Bar2","format":"json"}"""))
-            .getJSONArray("records").getJSONObject(0).getString("path")
-        root = bar2.removeSuffix("app/code/Foo/Bar2")
-    }
-
+class MagentoPreferenceResolutionTest : MagentoDiResolutionTestCase() {
     private fun di(path: String, vararg preferences: Pair<String, String>) {
-        myFixture.addFileToProject("$root$path", "<config>\n" + preferences.joinToString("\n") { (from, to) ->
+        file(path, "<config>\n" + preferences.joinToString("\n") { (from, to) ->
             "    <preference for=\"$from\" type=\"$to\"/>"
         } + "\n</config>\n")
-    }
-
-    private fun config(vararg modules: Pair<String, Int>) = configText("<?php\nreturn [\n    'modules' => [\n" +
-        modules.joinToString("") { (name, enabled) -> "        '$name' => $enabled,\n" } + "    ],\n];\n")
-
-    private fun configText(text: String) {
-        val existing = myFixture.findFileInTempDir("${root}app/etc/config.php")
-        if (existing == null) {
-            myFixture.addFileToProject("${root}app/etc/config.php", text)
-        } else {
-            WriteCommandAction.runWriteCommandAction(project) {
-                PsiDocumentManager.getInstance(project).getDocument(psiManager.findFile(existing)!!)!!.setText(text)
-            }
-        }
-        PsiDocumentManager.getInstance(project).commitAllDocuments()
-    }
-
-    private fun module(name: String) {
-        val directory = "${root}app/code/Acme/${name.substringAfter('_')}"
-        myFixture.addFileToProject("$directory/registration.php", "<?php \\Magento\\Framework\\Component\\ComponentRegistrar::register(" +
-            "\\Magento\\Framework\\Component\\ComponentRegistrar::MODULE, '$name', __DIR__);")
-        myFixture.addFileToProject("$directory/etc/module.xml", "<config><module name=\"$name\"/></config>")
     }
 
     private fun addDeclarations() {
@@ -55,6 +22,8 @@ class MagentoPreferenceResolutionTest : BaseProjectTestCase() {
         di("app/code/Acme/First/etc/frontend/di.xml", "Acme\\Api" to "Acme\\FrontBar")
         di("app/code/Acme/Second/etc/di.xml", "Acme\\Api" to "Acme\\FromBar2", "Acme\\Middle" to "Acme\\End", "Acme\\LoopBack" to "Acme\\Loop")
         di("app/code/Acme/Off/etc/di.xml", "Acme\\Api" to "Acme\\Disabled")
+        // Magento never reads etc/global/di.xml.
+        di("app/code/Acme/Second/etc/global/di.xml", "Acme\\Api" to "Acme\\GlobalDir")
         PsiDocumentManager.getInstance(project).commitAllDocuments()
     }
 
@@ -70,7 +39,7 @@ class MagentoPreferenceResolutionTest : BaseProjectTestCase() {
         val global = resolve("\\Acme\\Api")
         assertEquals("Acme\\FromBar2", global.effectiveType)
         assertEquals(listOf("not_loaded:Acme\\Base", "overridden:Acme\\Primary", "overridden:Acme\\FromBar",
-            "applies:Acme\\FromBar2", "disabled_module:Acme\\Disabled"), statuses(global))
+            "applies:Acme\\FromBar2", "not_loaded:Acme\\GlobalDir", "disabled_module:Acme\\Disabled"), statuses(global))
         assertEquals("Acme\\FrontBar", resolve("Acme\\Api", "frontend").effectiveType)
         assertEquals("Acme\\FromBar2", resolve("Acme\\Api", "adminhtml").effectiveType)
 
@@ -99,7 +68,7 @@ class MagentoPreferenceResolutionTest : BaseProjectTestCase() {
         assertNull(api.effectiveType)
         assertTrue(api.reason, api.reason.contains("was not found"))
         assertEquals(listOf("not_loaded:Acme\\Base", "candidate:Acme\\Primary", "candidate:Acme\\FromBar",
-            "candidate:Acme\\Disabled", "candidate:Acme\\FromBar2"), statuses(api))
+            "candidate:Acme\\Disabled", "candidate:Acme\\FromBar2", "not_loaded:Acme\\GlobalDir"), statuses(api))
         // The vendor copy of app/etc/di.xml is never loaded, so the root file decides alone.
         val solo = resolve("Acme\\Solo")
         assertEquals("Acme\\SoloPrimary", solo.effectiveType)

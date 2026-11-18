@@ -22,7 +22,7 @@ internal object MagentoPhpDiQueries {
         val targetClassName = MagentoMcpSupport.normalizeFqn(className)
         val targetMethodName = methodName.trim()
         val sorted = try {
-            pluginMatches(project, targetClassName, targetMethodName)
+            pluginMatches(project, targetClassName, targetMethodName).first
         } catch (exception: InvalidInspectionRequest) {
             return exception.message.orEmpty()
         }
@@ -52,37 +52,55 @@ internal object MagentoPhpDiQueries {
     }
 
     /**
-     * One record per matching plugin method, located at its `di.xml` declaration so the module and
-     * area filters apply; the plugin method's own file and line are fields.
+     * One record per matching plugin method, located at its `di.xml` declaration so the module and path
+     * filters apply; the plugin method's own file and line are fields. With [area], only declarations of
+     * global and that area are listed, each with the status Magento's merge gives it there.
      */
-    fun pluginRecords(project: Project, className: String, methodName: String): List<InspectionRecord> {
+    fun pluginRecords(project: Project, className: String, methodName: String, area: String? = null): PluginRecords {
         val targetClassName = MagentoMcpSupport.normalizeFqn(className)
         val targetMethodName = methodName.trim()
         val key = "$targetClassName::$targetMethodName"
         val lineIndexes = mutableMapOf<String, MagentoMcpSupport.LineIndex>()
-        return pluginMatches(project, targetClassName, targetMethodName).map { match ->
+        val (matches, resolution) = pluginMatches(project, targetClassName, targetMethodName, area)
+        return PluginRecords(matches.map { match ->
             val methodFile = match.method.containingFile
             val methodPath = MagentoMcpSupport.relativePath(project, methodFile.virtualFile)
             val methodLines = lineIndexes.getOrPut(methodPath) { MagentoMcpSupport.LineIndex(methodFile.viewProvider.contents) }
-            InspectionRecord("plugin", key, match.data.filePath, match.data.line, match.scope, linkedMapOf(
+            val fields = linkedMapOf<String, Any?>(
                 "name" to match.data.pluginName,
                 "type" to match.pluginClass.presentableFQN,
                 "method" to match.method.name,
                 "pluginKind" to match.kind,
                 "target" to match.targetFqn,
-                "sortOrder" to match.sortOrder,
+                "sortOrder" to (resolution?.sortOrders?.get(match.data) ?: match.sortOrder),
                 "methodPath" to methodPath,
                 "methodLine" to methodLines.lineOf(match.method)
-            ))
+            )
+            resolution?.fates?.get(match.data)?.let { fate ->
+                fields["status"] = fate.status
+                fate.by?.let { fields["statusBy"] = "${it.filePath}:${it.line}" }
+            }
+            InspectionRecord("plugin", key, match.data.filePath, match.data.line, match.scope, fields)
+        }, resolution)
+    }
+
+    private fun resolve(project: Project, targetClassName: String, area: String): MagentoPluginResolution.Resolution {
+        val phpIndex = PhpIndex.getInstance(project)
+        return MagentoPluginResolution.resolve(project, targetClassName, area) {
+            MagentoPhpInspectionSupport.magentoParents(phpIndex, it)
         }
     }
 
-    /** Plugin methods of the target hierarchy in the order of the text reply. */
+    /**
+     * Plugin methods of the target hierarchy in the order of the text reply. With [area], the declarations
+     * come from the area's merge and include those Magento does not run, which sort after the ones it runs.
+     */
     private fun pluginMatches(
         project: Project,
         targetClassName: String,
-        targetMethodName: String
-    ): List<MagentoPhpInspectionSupport.PluginMethodMatch> {
+        targetMethodName: String,
+        area: String? = null
+    ): Pair<List<MagentoPhpInspectionSupport.PluginMethodMatch>, MagentoPluginResolution.Resolution?> {
         if (targetClassName.isEmpty() || targetMethodName.isEmpty()) {
             throw InvalidInspectionRequest("Provide both a target class name and method name.")
         }
@@ -95,12 +113,14 @@ internal object MagentoPhpDiQueries {
 
         val allTargetFqns = linkedSetOf(targetClassName)
         targetClasses.forEach { MagentoPhpInspectionSupport.collectClassHierarchy(it, allTargetFqns) }
-        val pluginDeclarations = findPluginDeclarations(project, allTargetFqns)
+        val resolution = area?.let { resolve(project, targetClassName, it) }
+        val pluginDeclarations = resolution?.fates?.keys?.groupBy { it.targetFqn }
+            ?: findPluginDeclarations(project, allTargetFqns)
         val pluginCandidates = mutableListOf<MagentoPhpInspectionSupport.PluginMethodMatch>()
 
         for (targetFqn in allTargetFqns) {
             for (pluginDeclaration in pluginDeclarations[targetFqn].orEmpty()) {
-                if (pluginDeclaration.disabled) {
+                if (resolution == null && pluginDeclaration.disabled) {
                     continue
                 }
                 val pluginType = pluginDeclaration.pluginType ?: continue
@@ -122,9 +142,10 @@ internal object MagentoPhpDiQueries {
             }
         }
 
-        return pluginCandidates
-            .distinctBy { "${it.targetFqn}:${it.pluginClass.fqn}:${it.method.name}:${it.scope}:${it.sortOrder}" }
-            .sortedWith(
+        val distinct = pluginCandidates
+            .distinctBy { "${it.targetFqn}:${it.pluginClass.fqn}:${it.method.name}:${it.scope}:${it.sortOrder}:${if (resolution == null) "" else "${it.data.filePath}:${it.data.line}"}" }
+        val matches = if (resolution == null) {
+            distinct.sortedWith(
                 compareBy<MagentoPhpInspectionSupport.PluginMethodMatch>(
                     { MagentoMcpSupport.pluginKindOrder(it.kind) },
                     { MagentoMcpSupport.configScopeOrder(it.scope) },
@@ -133,6 +154,21 @@ internal object MagentoPhpDiQueries {
                     { it.method.name }
                 )
             )
+        } else {
+            // Plugins that run come first in Magento's order: sortOrder, then position in the merged list.
+            distinct.sortedWith(
+                compareBy<MagentoPhpInspectionSupport.PluginMethodMatch>(
+                    { if (resolution.fates[it.data]?.status == "applies") 0 else 1 },
+                    { MagentoMcpSupport.pluginKindOrder(it.kind) },
+                    { resolution.sortOrders[it.data] ?: it.sortOrder },
+                    { resolution.positions[it.data] ?: Int.MAX_VALUE },
+                    { it.data.filePath },
+                    { it.data.line },
+                    { it.method.name }
+                )
+            )
+        }
+        return matches to resolution
     }
 
     private fun findPluginDeclarations(
@@ -191,19 +227,8 @@ internal object MagentoPhpDiQueries {
             }
 
             for (pluginTag in typeTag.findSubTags(ModuleDiXml.PLUGIN_TAG_NAME)) {
-                declarations.getOrPut(typeName, ::mutableListOf) += PluginDeclarationRecord(
-                    filePath = filePath,
-                    line = lines.lineOf(pluginTag),
-                    targetFqn = typeName,
-                    pluginName = pluginTag.getAttributeValue(ModuleDiXml.NAME_ATTR) ?: "-",
-                    pluginType = MagentoMcpSupport.presentableFqn(
-                        pluginTag.getAttributeValue(ModuleDiXml.TYPE_ATTR)
-                    ),
-                    sortOrder = pluginTag.getAttributeValue(ModuleDiXml.SORT_ORDER_ATTR)?.toIntOrNull() ?: 0,
-                    disabled = pluginTag.getAttributeValue(ModuleDiXml.DISABLED_ATTR_NAME)
-                        .equals("true", ignoreCase = true),
-                    scope = scope
-                )
+                declarations.getOrPut(typeName, ::mutableListOf) +=
+                    PluginDeclarationRecord.of(pluginTag, filePath, lines.lineOf(pluginTag), typeName, scope)
             }
         }
     }
